@@ -12,6 +12,7 @@ struct EmailDetailView: View {
     @State private var loadedEmail: Email?
     @State private var isLoading = false
     @State private var isPerformingAction = false
+    @State private var isShowingReply = false
     @State private var errorMessage: String?
 
     private let apiClient = APIClient()
@@ -61,6 +62,13 @@ struct EmailDetailView: View {
         .navigationTitle(visibleEmail.subject)
         .toolbar {
             Button {
+                isShowingReply = true
+            } label: {
+                Label("Reply", systemImage: "arrowshape.turn.up.left")
+            }
+            .disabled(isPerformingAction)
+
+            Button {
                 Task {
                     await toggleStar()
                 }
@@ -98,6 +106,12 @@ struct EmailDetailView: View {
         }
         .task(id: email.id) {
             await loadEmail()
+        }
+        .sheet(isPresented: $isShowingReply) {
+            NavigationStack {
+                ComposerView(mode: .reply(visibleEmail)) {}
+            }
+            .frame(minWidth: 520, minHeight: 420)
         }
     }
 

@@ -53,6 +53,34 @@ struct APIClient {
         try await post("/emails/\(id)/unstar")
     }
 
+    func sendEmail(to: String, subject: String, body: String) async throws {
+        try await postJSON("/send", body: SendEmailRequest(to: to, subject: subject, body: body))
+    }
+
+    func reply(to email: Email, body: String) async throws {
+        try await postJSON(
+            "/reply",
+            body: ReplyEmailRequest(
+                to: email.senderEmailAddress,
+                subject: email.subject,
+                body: body,
+                threadId: email.threadId
+            )
+        )
+    }
+
+    func reply(to: String, subject: String, body: String, threadId: String) async throws {
+        try await postJSON(
+            "/reply",
+            body: ReplyEmailRequest(
+                to: to,
+                subject: subject,
+                body: body,
+                threadId: threadId
+            )
+        )
+    }
+
     private func get<T: Decodable>(_ path: String) async throws -> T {
         let url = baseURL.appending(path: path)
         let (data, response) = try await URLSession.shared.data(from: url)
@@ -79,6 +107,21 @@ struct APIClient {
             throw APIError.badResponse
         }
     }
+
+    private func postJSON<T: Encodable>(_ path: String, body: T) async throws {
+        let url = baseURL.appending(path: path)
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(body)
+
+        let (_, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200..<300).contains(httpResponse.statusCode) else {
+            throw APIError.badResponse
+        }
+    }
 }
 
 private struct GoogleAuthURLResponse: Decodable {
@@ -96,6 +139,19 @@ private struct EmailResponse: Decodable {
 struct AuthStatus: Decodable {
     let isSignedIn: Bool
     let email: String?
+}
+
+private struct SendEmailRequest: Encodable {
+    let to: String
+    let subject: String
+    let body: String
+}
+
+private struct ReplyEmailRequest: Encodable {
+    let to: String
+    let subject: String
+    let body: String
+    let threadId: String
 }
 
 enum APIError: Error {

@@ -6,6 +6,8 @@ import {
   listInboxEmails,
   markEmailRead,
   markEmailUnread,
+  replyToEmail,
+  sendEmail,
   starEmail,
   trashEmail,
   unstarEmail
@@ -55,6 +57,49 @@ emailRoutes.post("/emails/:id/archive", async (request, response, next) => {
 
     await archiveEmail(account, request.params.id);
     response.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+emailRoutes.post("/send", async (request, response, next) => {
+  try {
+    const account = await requireAccount(response);
+    if (!account) return;
+
+    const { to, subject, body } = request.body as { to?: string; subject?: string; body?: string };
+
+    if (!to || !subject || !body) {
+      response.status(400).json({ error: "Missing to, subject, or body." });
+      return;
+    }
+
+    const result = await sendEmail(account, { to, subject, body });
+    response.json({ ok: true, message: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+emailRoutes.post("/reply", async (request, response, next) => {
+  try {
+    const account = await requireAccount(response);
+    if (!account) return;
+
+    const { to, subject, body, threadId } = request.body as {
+      to?: string;
+      subject?: string;
+      body?: string;
+      threadId?: string;
+    };
+
+    if (!to || !subject || !body || !threadId) {
+      response.status(400).json({ error: "Missing to, subject, body, or threadId." });
+      return;
+    }
+
+    const result = await replyToEmail(account, { to, subject, body, threadId });
+    response.json({ ok: true, message: result });
   } catch (error) {
     next(error);
   }

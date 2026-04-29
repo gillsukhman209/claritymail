@@ -13,6 +13,7 @@ struct MailboxView: View {
     @State private var emails = Email.previewEmails
     @State private var isLoading = false
     @State private var errorMessage: String?
+    @State private var isShowingComposer = false
 
     private let apiClient = APIClient()
 
@@ -32,6 +33,12 @@ struct MailboxView: View {
             }
             .navigationTitle("ClarityMail")
             .toolbar {
+                Button {
+                    isShowingComposer = true
+                } label: {
+                    Label("Compose", systemImage: "square.and.pencil")
+                }
+
                 Button {
                     Task {
                         await loadEmails()
@@ -53,6 +60,16 @@ struct MailboxView: View {
             }
             .task {
                 await loadEmails()
+            }
+            .sheet(isPresented: $isShowingComposer) {
+                NavigationStack {
+                    ComposerView(mode: .compose) {
+                        Task {
+                            await loadEmails()
+                        }
+                    }
+                }
+                .frame(minWidth: 520, minHeight: 420)
             }
         } detail: {
             if let selectedMessage {

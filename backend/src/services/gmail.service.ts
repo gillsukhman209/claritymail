@@ -31,6 +31,36 @@ function decodeBase64Url(value: string) {
   return Buffer.from(normalized, "base64").toString("utf8");
 }
 
+function encodeBase64Url(value: string) {
+  return Buffer.from(value, "utf8")
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+}
+
+function encodeHeader(value: string) {
+  if (/^[\x00-\x7F]*$/.test(value)) {
+    return value;
+  }
+
+  return `=?UTF-8?B?${Buffer.from(value, "utf8").toString("base64")}?=`;
+}
+
+function buildRawEmail(input: { to: string; subject: string; body: string }) {
+  const lines = [
+    `To: ${input.to}`,
+    `Subject: ${encodeHeader(input.subject)}`,
+    "MIME-Version: 1.0",
+    "Content-Type: text/plain; charset=utf-8",
+    "Content-Transfer-Encoding: 8bit",
+    "",
+    input.body
+  ];
+
+  return encodeBase64Url(lines.join("\r\n"));
+}
+
 function stripHtml(value: string) {
   return value
     .replace(/<style[\s\S]*?<\/style>/gi, " ")
@@ -193,4 +223,40 @@ export async function unstarEmail(account: GmailAccount, id: string) {
       removeLabelIds: ["STARRED"]
     }
   });
+}
+
+export async function sendEmail(account: GmailAccount, input: { to: string; subject: string; body: string }) {
+  const gmail = getGmailClient(account);
+  const result = await gmail.users.messages.send({
+    userId: "me",
+    requestBody: {
+      raw: buildRawEmail(input)
+    }
+  });
+
+  return {
+    id: result.data.id,
+    threadId: result.data.threadId
+  };
+}
+
+export async function replyToEmail(account: GmailAccount, input: { to: string; subject: string; body: string; threadId: string }) {
+  const gmail = getGmailClient(account);
+  const subject = input.subject.toLowerCase().startsWith("re:") ? input.subject : `Re: ${input.subject}`;
+  const result = await gmail.users.messages.send({
+    userId: "me",
+    requestBody: {
+      raw: buildRawEmail({
+        to: input.to,
+        subject,
+        body: input.body
+      }),
+      threadId: input.threadId
+    }
+  });
+
+  return {
+    id: result.data.id,
+    threadId: result.data.threadId
+  };
 }

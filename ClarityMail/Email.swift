@@ -18,6 +18,16 @@ struct Email: Identifiable, Hashable, Codable {
     var isStarred: Bool
     var body: String?
 
+    var senderEmailAddress: String {
+        if let start = sender.lastIndex(of: "<"),
+           let end = sender.lastIndex(of: ">"),
+           start < end {
+            return String(sender[sender.index(after: start)..<end])
+        }
+
+        return sender
+    }
+
     enum CodingKeys: String, CodingKey {
         case id
         case threadId
