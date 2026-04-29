@@ -17,7 +17,8 @@ extension Email {
             snippet: "Your Gmail inbox and AI tools will appear here once Google auth is connected.",
             receivedAt: .now,
             isRead: false,
-            isStarred: false
+            isStarred: false,
+            body: "Your Gmail inbox and AI tools will appear here once Google auth is connected."
         ),
         Email(
             id: "preview-2",
@@ -27,7 +28,8 @@ extension Email {
             snippet: "Important emails, action items, and reply suggestions will be summarized here.",
             receivedAt: .now.addingTimeInterval(-3600),
             isRead: true,
-            isStarred: true
+            isStarred: true,
+            body: "Important emails, action items, and reply suggestions will be summarized here."
         )
     ]
 }

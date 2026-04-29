@@ -24,6 +24,11 @@ struct APIClient {
         return response.emails
     }
 
+    func email(id: Email.ID) async throws -> Email {
+        let response: EmailResponse = try await get("/emails/\(id)")
+        return response.email
+    }
+
     private func get<T: Decodable>(_ path: String) async throws -> T {
         let url = baseURL.appending(path: path)
         let (data, response) = try await URLSession.shared.data(from: url)
@@ -45,6 +50,10 @@ private struct GoogleAuthURLResponse: Decodable {
 
 private struct EmailsResponse: Decodable {
     let emails: [Email]
+}
+
+private struct EmailResponse: Decodable {
+    let email: Email
 }
 
 struct AuthStatus: Decodable {

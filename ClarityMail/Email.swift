@@ -16,6 +16,7 @@ struct Email: Identifiable, Hashable, Codable {
     let receivedAt: Date
     var isRead: Bool
     var isStarred: Bool
+    var body: String?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -26,5 +27,6 @@ struct Email: Identifiable, Hashable, Codable {
         case receivedAt
         case isRead
         case isStarred
+        case body
     }
 }
