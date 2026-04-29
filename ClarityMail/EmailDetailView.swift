@@ -22,87 +22,83 @@ struct EmailDetailView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(visibleEmail.subject)
-                        .font(.title2.bold())
+        ZStack {
+            Theme.Palette.background.ignoresSafeArea()
 
-                    Text(visibleEmail.sender)
-                        .foregroundStyle(.secondary)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 22) {
+                    headerSection
+
+                    summaryCard
+
+                    if let errorMessage {
+                        Text(errorMessage)
+                            .font(.system(size: 13))
+                            .foregroundStyle(Theme.Palette.warm)
+                    }
+
+                    Text(visibleEmail.body ?? visibleEmail.snippet)
+                        .font(.system(size: 15))
+                        .foregroundStyle(Theme.Palette.textPrimary.opacity(0.9))
+                        .lineSpacing(4)
+                        .textSelection(.enabled)
+
+                    if isLoading && loadedEmail == nil {
+                        ProgressView()
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                    }
                 }
-
-                Divider()
-
-                VStack(alignment: .leading, spacing: 8) {
-                    Label("AI Summary", systemImage: "sparkles")
-                        .font(.headline)
-
-                    Text("AI summary will appear here after the OpenAI backend route is connected.")
-                        .foregroundStyle(.secondary)
-                }
-                .padding()
-                .background(.thinMaterial)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-
-                if isLoading {
-                    ProgressView()
-                } else if let errorMessage {
-                    Text(errorMessage)
-                        .foregroundStyle(.secondary)
-                }
-
-                Text(visibleEmail.body ?? visibleEmail.snippet)
-                    .font(.body)
-                    .textSelection(.enabled)
+                .frame(maxWidth: 760, alignment: .leading)
+                .padding(.horizontal, 22)
+                .padding(.top, 12)
+                .padding(.bottom, 40)
             }
-            .frame(maxWidth: 760, alignment: .leading)
-            .padding()
+            .scrollIndicators(.hidden)
         }
-        .navigationTitle(visibleEmail.subject)
+        .navigationTitle("")
         .toolbar {
-            Button {
-                isShowingReply = true
-            } label: {
-                Label("Reply", systemImage: "arrowshape.turn.up.left")
-            }
-            .disabled(isPerformingAction)
-
-            Button {
-                Task {
-                    await toggleStar()
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    isShowingReply = true
+                } label: {
+                    Label("Reply", systemImage: "arrowshape.turn.up.left")
                 }
-            } label: {
-                Label(visibleEmail.isStarred ? "Unstar" : "Star", systemImage: visibleEmail.isStarred ? "star.fill" : "star")
+                .disabled(isPerformingAction)
             }
-            .disabled(isPerformingAction)
 
-            Button {
-                Task {
-                    await toggleRead()
-                }
-            } label: {
-                Label(visibleEmail.isRead ? "Mark Unread" : "Mark Read", systemImage: visibleEmail.isRead ? "envelope.badge" : "envelope.open")
-            }
-            .disabled(isPerformingAction)
+            ToolbarItem(placement: .primaryAction) {
+                Menu {
+                    Button {
+                        Task { await toggleStar() }
+                    } label: {
+                        Label(visibleEmail.isStarred ? "Unstar" : "Star",
+                              systemImage: visibleEmail.isStarred ? "star.fill" : "star")
+                    }
 
-            Button {
-                Task {
-                    await archive()
-                }
-            } label: {
-                Label("Archive", systemImage: "archivebox")
-            }
-            .disabled(isPerformingAction)
+                    Button {
+                        Task { await toggleRead() }
+                    } label: {
+                        Label(visibleEmail.isRead ? "Mark Unread" : "Mark Read",
+                              systemImage: visibleEmail.isRead ? "envelope.badge" : "envelope.open")
+                    }
 
-            Button(role: .destructive) {
-                Task {
-                    await trash()
+                    Button {
+                        Task { await archive() }
+                    } label: {
+                        Label("Archive", systemImage: "archivebox")
+                    }
+
+                    Button(role: .destructive) {
+                        Task { await trash() }
+                    } label: {
+                        Label("Trash", systemImage: "trash")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
                 }
-            } label: {
-                Label("Trash", systemImage: "trash")
+                .disabled(isPerformingAction)
             }
-            .disabled(isPerformingAction)
         }
         .task(id: email.id) {
             await loadEmail()
@@ -111,8 +107,84 @@ struct EmailDetailView: View {
             NavigationStack {
                 ComposerView(mode: .reply(visibleEmail)) {}
             }
-            .frame(minWidth: 520, minHeight: 420)
         }
+        .tint(Theme.Palette.accent)
+    }
+
+    private var headerSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("PRIORITY")
+                .font(.system(size: 11, weight: .semibold))
+                .tracking(1.4)
+                .foregroundStyle(Theme.Palette.warmSoft)
+
+            Text(visibleEmail.subject)
+                .font(.system(size: 24, weight: .semibold))
+                .foregroundStyle(Theme.Palette.textPrimary)
+
+            HStack(spacing: 10) {
+                Circle()
+                    .fill(
+                        LinearGradient(
+                            colors: [Theme.Palette.accent.opacity(0.85), Theme.Palette.accent.opacity(0.55)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .frame(width: 32, height: 32)
+                    .overlay(
+                        Text(initials)
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(.white)
+                    )
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(visibleEmail.sender)
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(Theme.Palette.textPrimary)
+                        .lineLimit(1)
+                    Text(visibleEmail.receivedAt, style: .date)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.Palette.textTertiary)
+                }
+                Spacer()
+            }
+        }
+    }
+
+    private var summaryCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Theme.Palette.accentSoft)
+                Text("FLUX SUMMARY")
+                    .font(.system(size: 11, weight: .semibold))
+                    .tracking(1.4)
+                    .foregroundStyle(Theme.Palette.accentSoft)
+            }
+
+            Text("AI summary will appear here once the OpenAI route is connected.")
+                .font(.system(size: 14))
+                .foregroundStyle(Theme.Palette.textSecondary)
+                .lineSpacing(2)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(18)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.Radius.row, style: .continuous)
+                .fill(Theme.Palette.surface.opacity(0.6))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.Radius.row, style: .continuous)
+                .strokeBorder(Theme.Gradients.pulseCardBorder, lineWidth: 1)
+        )
+    }
+
+    private var initials: String {
+        let name = visibleEmail.sender
+        let parts = name.split(separator: " ").prefix(2)
+        return parts.compactMap { $0.first.map(String.init) }.joined().uppercased()
     }
 
     private func loadEmail() async {
