@@ -8,6 +8,8 @@
 import Foundation
 
 struct Email: Identifiable, Hashable, Codable {
+    let accountId: String?
+    let accountEmail: String?
     let id: String
     let threadId: String
     let subject: String
@@ -30,6 +32,8 @@ struct Email: Identifiable, Hashable, Codable {
 
     enum CodingKeys: String, CodingKey {
         case id
+        case accountId
+        case accountEmail
         case threadId
         case subject
         case sender

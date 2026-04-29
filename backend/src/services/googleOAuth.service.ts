@@ -23,7 +23,7 @@ export function createGoogleAuthUrl() {
 
   return oauth2Client.generateAuthUrl({
     access_type: "offline",
-    prompt: "consent",
+    prompt: "consent select_account",
     scope: scopes
   });
 }

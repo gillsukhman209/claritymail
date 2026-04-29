@@ -10,6 +10,8 @@ import Foundation
 extension Email {
     static let previewEmails: [Email] = [
         Email(
+            accountId: nil,
+            accountEmail: nil,
             id: "preview-1",
             threadId: "thread-1",
             subject: "Welcome to ClarityMail",
@@ -21,6 +23,8 @@ extension Email {
             body: "Your Gmail inbox and AI tools will appear here once Google auth is connected."
         ),
         Email(
+            accountId: nil,
+            accountEmail: nil,
             id: "preview-2",
             threadId: "thread-2",
             subject: "Daily digest preview",

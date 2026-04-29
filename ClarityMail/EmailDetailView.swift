@@ -9,6 +9,7 @@ import SwiftUI
 
 struct EmailDetailView: View {
     let email: Email
+    let accountId: String?
     @State private var loadedEmail: Email?
     @State private var isLoading = false
     @State private var isPerformingAction = false
@@ -105,7 +106,7 @@ struct EmailDetailView: View {
         }
         .sheet(isPresented: $isShowingReply) {
             NavigationStack {
-                ComposerView(mode: .reply(visibleEmail)) {}
+                ComposerView(mode: .reply(visibleEmail), accountId: accountId) {}
             }
         }
         .tint(Theme.Palette.accent)
@@ -192,7 +193,7 @@ struct EmailDetailView: View {
         defer { isLoading = false }
 
         do {
-            loadedEmail = try await apiClient.email(id: email.id)
+            loadedEmail = try await apiClient.email(id: email.id, accountId: accountId)
             errorMessage = nil
         } catch {
             errorMessage = "Could not load email body."
@@ -202,9 +203,9 @@ struct EmailDetailView: View {
     private func toggleStar() async {
         await performAction {
             if visibleEmail.isStarred {
-                try await apiClient.unstarEmail(id: visibleEmail.id)
+                try await apiClient.unstarEmail(id: visibleEmail.id, accountId: accountId)
             } else {
-                try await apiClient.starEmail(id: visibleEmail.id)
+                try await apiClient.starEmail(id: visibleEmail.id, accountId: accountId)
             }
         }
 
@@ -219,9 +220,9 @@ struct EmailDetailView: View {
     private func toggleRead() async {
         await performAction {
             if visibleEmail.isRead {
-                try await apiClient.markEmailUnread(id: visibleEmail.id)
+                try await apiClient.markEmailUnread(id: visibleEmail.id, accountId: accountId)
             } else {
-                try await apiClient.markEmailRead(id: visibleEmail.id)
+                try await apiClient.markEmailRead(id: visibleEmail.id, accountId: accountId)
             }
         }
 
@@ -235,13 +236,13 @@ struct EmailDetailView: View {
 
     private func archive() async {
         await performAction {
-            try await apiClient.archiveEmail(id: visibleEmail.id)
+            try await apiClient.archiveEmail(id: visibleEmail.id, accountId: accountId)
         }
     }
 
     private func trash() async {
         await performAction {
-            try await apiClient.trashEmail(id: visibleEmail.id)
+            try await apiClient.trashEmail(id: visibleEmail.id, accountId: accountId)
         }
     }
 

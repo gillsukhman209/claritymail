@@ -96,13 +96,14 @@ function findBodyPart(payload: any, mimeType: string): string | null {
   return null;
 }
 
-export async function listInboxEmails(account: GmailAccount) {
+export async function listInboxEmails(account: GmailAccount, options: { query?: string } = {}) {
   const gmail = getGmailClient(account);
 
   const listResponse = await gmail.users.messages.list({
     userId: "me",
     labelIds: ["INBOX"],
-    maxResults: 20
+    maxResults: 30,
+    q: options.query?.trim() || undefined
   });
 
   const messages = listResponse.data.messages ?? [];
@@ -121,6 +122,8 @@ export async function listInboxEmails(account: GmailAccount) {
       const labelIds = data.labelIds ?? [];
 
       return {
+        accountId: account.id ?? "",
+        accountEmail: account.email ?? "",
         id: data.id ?? "",
         threadId: data.threadId ?? "",
         subject: headerValue(headers, "Subject") || "(No subject)",
@@ -153,6 +156,8 @@ export async function getEmail(account: GmailAccount, id: string) {
   const body = plainText?.trim() || (html ? stripHtml(html) : data.snippet ?? "");
 
   return {
+    accountId: account.id ?? "",
+    accountEmail: account.email ?? "",
     id: data.id ?? "",
     threadId: data.threadId ?? "",
     subject: headerValue(headers, "Subject") || "(No subject)",

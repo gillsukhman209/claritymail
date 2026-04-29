@@ -1,7 +1,9 @@
 import { Router } from "express";
 import {
   getGoogleAccountByEmail,
+  getGoogleAccountById,
   getLatestGoogleAccount,
+  listGoogleAccounts,
   saveGmailSyncEvent,
   updateGmailWatchState
 } from "../db/accounts.repo.js";
@@ -23,9 +25,27 @@ function decodePubSubData(data: string) {
   };
 }
 
-realtimeRoutes.post("/gmail/watch", async (_request, response, next) => {
+realtimeRoutes.post("/gmail/watch", async (request, response, next) => {
   try {
-    const account = await getLatestGoogleAccount();
+    const accountId = typeof request.query.accountId === "string" ? request.query.accountId : undefined;
+    if (!accountId) {
+      const accounts = await listGoogleAccounts();
+      const watches = [];
+
+      for (const accountSummary of accounts) {
+        const account = await getGoogleAccountById(accountSummary.id);
+        if (!account) continue;
+
+        const watch = await startGmailWatch(account);
+        await updateGmailWatchState(account.id, watch);
+        watches.push({ accountId: account.id, email: account.email, ...watch });
+      }
+
+      response.json({ ok: true, watches });
+      return;
+    }
+
+    const account = accountId ? await getGoogleAccountById(accountId) : await getLatestGoogleAccount();
     if (!account) {
       response.status(401).json({ error: "No Gmail account connected." });
       return;

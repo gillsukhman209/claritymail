@@ -9,6 +9,21 @@ type GoogleProfile = {
   picture: string | null;
 };
 
+function decryptAccount(docId: string, data: FirebaseFirestore.DocumentData) {
+  const encryptedRefreshToken = data.encryptedRefreshToken;
+
+  if (typeof encryptedRefreshToken !== "string") {
+    throw new Error("Connected Gmail account is missing a refresh token.");
+  }
+
+  return {
+    id: docId,
+    email: String(data.email),
+    refreshToken: decryptText(encryptedRefreshToken),
+    lastHistoryId: typeof data.lastHistoryId === "string" ? data.lastHistoryId : null
+  };
+}
+
 export async function saveGoogleAccount(profile: GoogleProfile, tokens: Credentials) {
   if (!tokens.refresh_token) {
     throw new Error("Google did not return a refresh token. Re-consent is required.");
@@ -62,18 +77,35 @@ export async function getLatestGoogleAccount() {
     return null;
   }
 
-  const data = doc.data();
-  const encryptedRefreshToken = data.encryptedRefreshToken;
+  return decryptAccount(doc.id, doc.data());
+}
 
-  if (typeof encryptedRefreshToken !== "string") {
-    throw new Error("Connected Gmail account is missing a refresh token.");
+export async function listGoogleAccounts() {
+  const db = getFirestore();
+  const snapshot = await db
+    .collection("gmailAccounts")
+    .orderBy("updatedAt", "desc")
+    .get();
+
+  return snapshot.docs.map((doc) => {
+    const data = doc.data();
+    return {
+      id: doc.id,
+      email: String(data.email),
+      provider: String(data.provider ?? "gmail")
+    };
+  });
+}
+
+export async function getGoogleAccountById(accountId: string) {
+  const db = getFirestore();
+  const doc = await db.collection("gmailAccounts").doc(accountId).get();
+
+  if (!doc.exists) {
+    return null;
   }
 
-  return {
-    id: doc.id,
-    email: String(data.email),
-    refreshToken: decryptText(encryptedRefreshToken)
-  };
+  return decryptAccount(doc.id, doc.data() ?? {});
 }
 
 export async function getGoogleAccountByEmail(email: string) {
@@ -89,19 +121,7 @@ export async function getGoogleAccountByEmail(email: string) {
     return null;
   }
 
-  const data = doc.data();
-  const encryptedRefreshToken = data.encryptedRefreshToken;
-
-  if (typeof encryptedRefreshToken !== "string") {
-    throw new Error("Connected Gmail account is missing a refresh token.");
-  }
-
-  return {
-    id: doc.id,
-    email: String(data.email),
-    refreshToken: decryptText(encryptedRefreshToken),
-    lastHistoryId: typeof data.lastHistoryId === "string" ? data.lastHistoryId : null
-  };
+  return decryptAccount(doc.id, doc.data());
 }
 
 export async function updateGmailWatchState(

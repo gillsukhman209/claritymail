@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { createGoogleAuthUrl, exchangeGoogleCode } from "../services/googleOAuth.service.js";
-import { getLatestGoogleAccount, saveGoogleAccount } from "../db/accounts.repo.js";
+import { getLatestGoogleAccount, listGoogleAccounts, saveGoogleAccount } from "../db/accounts.repo.js";
 
 export const authRoutes = Router();
 
@@ -15,6 +15,15 @@ authRoutes.get("/status", async (_request, response, next) => {
       isSignedIn: Boolean(account),
       email: account?.email ?? null
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+authRoutes.get("/accounts", async (_request, response, next) => {
+  try {
+    const accounts = await listGoogleAccounts();
+    response.json({ accounts });
   } catch (error) {
     next(error);
   }

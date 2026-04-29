@@ -19,48 +19,60 @@ struct APIClient {
         try await get("/auth/status")
     }
 
-    func emails() async throws -> [Email] {
-        let response: EmailsResponse = try await get("/emails")
+    func accounts() async throws -> [GmailAccount] {
+        let response: AccountsResponse = try await get("/auth/accounts")
+        return response.accounts
+    }
+
+    func emails(accountId: String? = nil, searchQuery: String? = nil) async throws -> [Email] {
+        let response: EmailsResponse = try await get(
+            "/emails",
+            queryItems: accountQueryItems(accountId: accountId, searchQuery: searchQuery)
+        )
         return response.emails
     }
 
-    func email(id: Email.ID) async throws -> Email {
-        let response: EmailResponse = try await get("/emails/\(id)")
+    func email(id: Email.ID, accountId: String? = nil) async throws -> Email {
+        let response: EmailResponse = try await get(
+            "/emails/\(id)",
+            queryItems: accountQueryItems(accountId: accountId)
+        )
         return response.email
     }
 
-    func archiveEmail(id: Email.ID) async throws {
-        try await post("/emails/\(id)/archive")
+    func archiveEmail(id: Email.ID, accountId: String? = nil) async throws {
+        try await post("/emails/\(id)/archive", queryItems: accountQueryItems(accountId: accountId))
     }
 
-    func trashEmail(id: Email.ID) async throws {
-        try await post("/emails/\(id)/trash")
+    func trashEmail(id: Email.ID, accountId: String? = nil) async throws {
+        try await post("/emails/\(id)/trash", queryItems: accountQueryItems(accountId: accountId))
     }
 
-    func markEmailRead(id: Email.ID) async throws {
-        try await post("/emails/\(id)/read")
+    func markEmailRead(id: Email.ID, accountId: String? = nil) async throws {
+        try await post("/emails/\(id)/read", queryItems: accountQueryItems(accountId: accountId))
     }
 
-    func markEmailUnread(id: Email.ID) async throws {
-        try await post("/emails/\(id)/unread")
+    func markEmailUnread(id: Email.ID, accountId: String? = nil) async throws {
+        try await post("/emails/\(id)/unread", queryItems: accountQueryItems(accountId: accountId))
     }
 
-    func starEmail(id: Email.ID) async throws {
-        try await post("/emails/\(id)/star")
+    func starEmail(id: Email.ID, accountId: String? = nil) async throws {
+        try await post("/emails/\(id)/star", queryItems: accountQueryItems(accountId: accountId))
     }
 
-    func unstarEmail(id: Email.ID) async throws {
-        try await post("/emails/\(id)/unstar")
+    func unstarEmail(id: Email.ID, accountId: String? = nil) async throws {
+        try await post("/emails/\(id)/unstar", queryItems: accountQueryItems(accountId: accountId))
     }
 
-    func sendEmail(to: String, subject: String, body: String) async throws {
-        try await postJSON("/send", body: SendEmailRequest(to: to, subject: subject, body: body))
+    func sendEmail(to: String, subject: String, body: String, accountId: String? = nil) async throws {
+        try await postJSON("/send", body: SendEmailRequest(accountId: accountId, to: to, subject: subject, body: body))
     }
 
-    func reply(to email: Email, body: String) async throws {
+    func reply(to email: Email, body: String, accountId: String? = nil) async throws {
         try await postJSON(
             "/reply",
             body: ReplyEmailRequest(
+                accountId: accountId,
                 to: email.senderEmailAddress,
                 subject: email.subject,
                 body: body,
@@ -69,10 +81,11 @@ struct APIClient {
         )
     }
 
-    func reply(to: String, subject: String, body: String, threadId: String) async throws {
+    func reply(to: String, subject: String, body: String, threadId: String, accountId: String? = nil) async throws {
         try await postJSON(
             "/reply",
             body: ReplyEmailRequest(
+                accountId: accountId,
                 to: to,
                 subject: subject,
                 body: body,
@@ -81,12 +94,12 @@ struct APIClient {
         )
     }
 
-    func startRealtimeSync() async throws {
-        try await post("/gmail/watch")
+    func startRealtimeSync(accountId: String? = nil) async throws {
+        try await post("/gmail/watch", queryItems: accountQueryItems(accountId: accountId))
     }
 
-    private func get<T: Decodable>(_ path: String) async throws -> T {
-        let url = baseURL.appending(path: path)
+    private func get<T: Decodable>(_ path: String, queryItems: [URLQueryItem] = []) async throws -> T {
+        let url = makeURL(path, queryItems: queryItems)
         let (data, response) = try await URLSession.shared.data(from: url)
 
         guard let httpResponse = response as? HTTPURLResponse,
@@ -99,8 +112,8 @@ struct APIClient {
         return try decoder.decode(T.self, from: data)
     }
 
-    private func post(_ path: String) async throws {
-        let url = baseURL.appending(path: path)
+    private func post(_ path: String, queryItems: [URLQueryItem] = []) async throws {
+        let url = makeURL(path, queryItems: queryItems)
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
 
@@ -113,7 +126,7 @@ struct APIClient {
     }
 
     private func postJSON<T: Encodable>(_ path: String, body: T) async throws {
-        let url = baseURL.appending(path: path)
+        let url = makeURL(path)
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -125,6 +138,25 @@ struct APIClient {
               (200..<300).contains(httpResponse.statusCode) else {
             throw APIError.badResponse
         }
+    }
+
+    private func makeURL(_ path: String, queryItems: [URLQueryItem] = []) -> URL {
+        var components = URLComponents(url: baseURL.appending(path: path), resolvingAgainstBaseURL: false)!
+        if !queryItems.isEmpty {
+            components.queryItems = queryItems
+        }
+        return components.url!
+    }
+
+    private func accountQueryItems(accountId: String?, searchQuery: String? = nil) -> [URLQueryItem] {
+        var items: [URLQueryItem] = []
+        if let accountId, !accountId.isEmpty {
+            items.append(URLQueryItem(name: "accountId", value: accountId))
+        }
+        if let searchQuery, !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            items.append(URLQueryItem(name: "q", value: searchQuery))
+        }
+        return items
     }
 }
 
@@ -140,18 +172,30 @@ private struct EmailResponse: Decodable {
     let email: Email
 }
 
+private struct AccountsResponse: Decodable {
+    let accounts: [GmailAccount]
+}
+
+struct GmailAccount: Identifiable, Hashable, Decodable {
+    let id: String
+    let email: String
+    let provider: String
+}
+
 struct AuthStatus: Decodable {
     let isSignedIn: Bool
     let email: String?
 }
 
 private struct SendEmailRequest: Encodable {
+    let accountId: String?
     let to: String
     let subject: String
     let body: String
 }
 
 private struct ReplyEmailRequest: Encodable {
+    let accountId: String?
     let to: String
     let subject: String
     let body: String

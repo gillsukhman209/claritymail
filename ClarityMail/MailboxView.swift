@@ -9,13 +9,19 @@ import SwiftUI
 
 struct MailboxView: View {
     @ObservedObject var session: SessionStore
+    @Environment(\.openURL) private var openURL
+
     @State private var selectedEmail: Email?
     @State private var emails = Email.previewEmails
+    @State private var accounts: [GmailAccount] = []
+    @State private var selectedAccountId: String?
+    @State private var searchText = ""
     @State private var isLoading = false
     @State private var errorMessage: String?
     @State private var isShowingComposer = false
     @State private var isShowingVoice = false
     @State private var autoRefreshTask: Task<Void, Never>?
+    @State private var searchTask: Task<Void, Never>?
 
     private let apiClient = APIClient()
 
@@ -32,6 +38,22 @@ struct MailboxView: View {
 
                         GreetingBlock(name: session.displayName)
                             .padding(.horizontal, 24)
+
+                        AccountSearchBar(
+                            accounts: accounts,
+                            selectedAccountId: $selectedAccountId,
+                            searchText: $searchText,
+                            onAddAccount: {
+                                Task { await session.signInWithGoogle() }
+                            },
+                            onRefreshAccounts: {
+                                Task {
+                                    await loadAccounts()
+                                    await loadEmails()
+                                }
+                            }
+                        )
+                        .padding(.horizontal, 20)
 
                         AIPulseCard(
                             important: importantCount,
@@ -68,19 +90,40 @@ struct MailboxView: View {
             }
             .modifier(HideNavigationBarModifier())
             .navigationDestination(item: $selectedEmail) { email in
-                EmailDetailView(email: email)
+                EmailDetailView(email: email, accountId: selectedAccountId ?? email.accountId)
             }
             .task {
+                await loadAccounts()
                 await loadEmails()
                 await startRealtimeSync()
                 startAutoRefresh()
             }
+            .onChange(of: selectedAccountId) {
+                selectedEmail = nil
+                Task {
+                    await loadEmails()
+                    await startRealtimeSync()
+                }
+            }
+            .onChange(of: searchText) {
+                searchTask?.cancel()
+                searchTask = Task {
+                    try? await Task.sleep(for: .milliseconds(350))
+                    if Task.isCancelled { return }
+                    await loadEmails()
+                }
+            }
+            .onChange(of: session.pendingAuthURL) {
+                guard let url = session.pendingAuthURL else { return }
+                openURL(url)
+            }
             .onDisappear {
                 autoRefreshTask?.cancel()
+                searchTask?.cancel()
             }
             .sheet(isPresented: $isShowingComposer) {
                 NavigationStack {
-                    ComposerView(mode: .compose) {
+                    ComposerView(mode: .compose, accountId: selectedAccountId) {
                         Task { await loadEmails() }
                     }
                 }
@@ -100,12 +143,24 @@ struct MailboxView: View {
     private var needsReplyCount: Int { max(unreadCount - importantCount, 0) }
     private var updatesCount: Int { emails.count }
 
+    private func loadAccounts() async {
+        do {
+            accounts = try await apiClient.accounts()
+            if let selectedAccountId, !accounts.contains(where: { $0.id == selectedAccountId }) {
+                self.selectedAccountId = nil
+            }
+            errorMessage = nil
+        } catch {
+            errorMessage = "Could not load accounts."
+        }
+    }
+
     private func loadEmails() async {
         isLoading = true
         defer { isLoading = false }
 
         do {
-            emails = try await apiClient.emails()
+            emails = try await apiClient.emails(accountId: selectedAccountId, searchQuery: searchText)
             errorMessage = nil
         } catch {
             errorMessage = "Could not load inbox."
@@ -114,7 +169,7 @@ struct MailboxView: View {
 
     private func startRealtimeSync() async {
         do {
-            try await apiClient.startRealtimeSync()
+            try await apiClient.startRealtimeSync(accountId: selectedAccountId)
         } catch {
             errorMessage = "Could not start realtime sync."
         }
@@ -128,6 +183,104 @@ struct MailboxView: View {
                 if Task.isCancelled { return }
                 await loadEmails()
             }
+        }
+    }
+}
+
+// MARK: - Account + Search
+
+private struct AccountSearchBar: View {
+    let accounts: [GmailAccount]
+    @Binding var selectedAccountId: String?
+    @Binding var searchText: String
+    let onAddAccount: () -> Void
+    let onRefreshAccounts: () -> Void
+
+    private var selectedAccount: GmailAccount? {
+        guard let selectedAccountId else { return nil }
+        return accounts.first { $0.id == selectedAccountId }
+    }
+
+    var body: some View {
+        VStack(spacing: 10) {
+            HStack(spacing: 10) {
+                Menu {
+                    Button {
+                        selectedAccountId = nil
+                    } label: {
+                        Label("All Inboxes", systemImage: selectedAccountId == nil ? "checkmark.circle.fill" : "tray.full")
+                    }
+
+                    Divider()
+
+                    ForEach(accounts) { account in
+                        Button {
+                            selectedAccountId = account.id
+                        } label: {
+                            Label(account.email, systemImage: selectedAccountId == account.id ? "checkmark.circle.fill" : "circle")
+                        }
+                    }
+
+                    Divider()
+
+                    Button(action: onAddAccount) {
+                        Label("Add Account", systemImage: "plus")
+                    }
+
+                    Button(action: onRefreshAccounts) {
+                        Label("Refresh Accounts", systemImage: "arrow.clockwise")
+                    }
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "person.crop.circle")
+                        Text(selectedAccount?.email ?? "All Inboxes")
+                            .lineLimit(1)
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 11, weight: .semibold))
+                    }
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(Theme.Palette.textPrimary)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .background(Theme.Palette.surface.opacity(0.65))
+                    .clipShape(Capsule())
+                    .overlay(
+                        Capsule()
+                            .strokeBorder(Theme.Palette.border, lineWidth: 1)
+                    )
+                }
+                .buttonStyle(.plain)
+
+                Spacer()
+            }
+
+            HStack(spacing: 10) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(Theme.Palette.textTertiary)
+
+                TextField("Search inbox", text: $searchText)
+                    .textFieldStyle(.plain)
+                    .foregroundStyle(Theme.Palette.textPrimary)
+
+                if !searchText.isEmpty {
+                    Button {
+                        searchText = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(Theme.Palette.textTertiary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .font(.system(size: 15))
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(Theme.Palette.surface.opacity(0.65))
+            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.button, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: Theme.Radius.button, style: .continuous)
+                    .strokeBorder(Theme.Palette.border, lineWidth: 1)
+            )
         }
     }
 }
@@ -354,6 +507,13 @@ private struct EmailRowView: View {
                     .font(.system(size: 14, weight: email.isRead ? .regular : .medium))
                     .foregroundStyle(Theme.Palette.textPrimary)
                     .lineLimit(1)
+
+                if let accountEmail = email.accountEmail, !accountEmail.isEmpty {
+                    Text(accountEmail)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(Theme.Palette.textTertiary)
+                        .lineLimit(1)
+                }
 
                 HStack(alignment: .top, spacing: 8) {
                     Text(email.snippet)

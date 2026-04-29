@@ -14,6 +14,7 @@ struct ComposerView: View {
     }
 
     let mode: Mode
+    let accountId: String?
     let onSent: () -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -94,9 +95,9 @@ struct ComposerView: View {
         do {
             switch mode {
             case .compose:
-                try await apiClient.sendEmail(to: to, subject: subject, body: messageBody)
+                try await apiClient.sendEmail(to: to, subject: subject, body: messageBody, accountId: accountId)
             case .reply(let email):
-                try await apiClient.reply(to: to, subject: subject, body: messageBody, threadId: email.threadId)
+                try await apiClient.reply(to: to, subject: subject, body: messageBody, threadId: email.threadId, accountId: accountId)
             }
 
             errorMessage = nil
