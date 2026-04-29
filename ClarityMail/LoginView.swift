@@ -15,37 +15,17 @@ struct LoginView: View {
         ZStack {
             Theme.Palette.background.ignoresSafeArea()
 
-            GeometryReader { proxy in
-                ZStack {
-                    Circle()
-                        .fill(Theme.Gradients.orb)
-                        .frame(width: proxy.size.width * 0.9, height: proxy.size.width * 0.9)
-                        .blur(radius: 70)
-                        .opacity(0.55)
-                        .offset(x: proxy.size.width * 0.25, y: -proxy.size.width * 0.20)
-
-                    Circle()
-                        .fill(Theme.Palette.accent.opacity(0.40))
-                        .frame(width: proxy.size.width * 0.55, height: proxy.size.width * 0.55)
-                        .blur(radius: 90)
-                        .offset(x: -proxy.size.width * 0.30, y: proxy.size.height * 0.30)
-                }
-            }
-            .ignoresSafeArea()
-            .allowsHitTesting(false)
-
             VStack(spacing: 28) {
                 Spacer()
 
                 VStack(spacing: 14) {
                     ZStack {
-                        Circle()
-                            .fill(Theme.Gradients.voiceButton)
+                        RoundedRectangle(cornerRadius: 22, style: .continuous)
+                            .fill(Theme.Gradients.primary)
                             .frame(width: 84, height: 84)
-                            .shadow(color: Theme.Palette.accent.opacity(0.55), radius: 24, x: 0, y: 10)
 
-                        Image(systemName: "sparkles")
-                            .font(.system(size: 36, weight: .light))
+                        Image(systemName: "envelope.fill")
+                            .font(.system(size: 32, weight: .regular))
                             .foregroundStyle(.white)
                     }
 
@@ -54,7 +34,7 @@ struct LoginView: View {
                         .kerning(-0.5)
                         .foregroundStyle(Theme.Palette.textPrimary)
 
-                    Text("Your inbox, with intent.")
+                    Text("Your inbox, focused.")
                         .font(.system(size: 15))
                         .foregroundStyle(Theme.Palette.textSecondary)
                 }
@@ -74,9 +54,8 @@ struct LoginView: View {
                         .foregroundStyle(.white)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 16)
-                        .background(Theme.Gradients.voiceButton)
+                        .background(Theme.Gradients.primary)
                         .clipShape(Capsule())
-                        .shadow(color: Theme.Palette.accent.opacity(0.4), radius: 16, x: 0, y: 8)
                     }
                     .buttonStyle(.plain)
 

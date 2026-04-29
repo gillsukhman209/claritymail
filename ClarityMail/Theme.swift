@@ -9,9 +9,9 @@ import SwiftUI
 
 enum Theme {
     enum Palette {
-        static let background = Color("ThemeBackground", bundle: nil, fallbackLight: Color(red: 0.97, green: 0.97, blue: 0.99), fallbackDark: Color(red: 0.043, green: 0.031, blue: 0.078))
-        static let surface = Color("ThemeSurface", bundle: nil, fallbackLight: Color.white, fallbackDark: Color(red: 0.082, green: 0.063, blue: 0.118))
-        static let surfaceElevated = Color("ThemeSurfaceElevated", bundle: nil, fallbackLight: Color.white, fallbackDark: Color(red: 0.110, green: 0.086, blue: 0.157))
+        static let background = Color("ThemeBackground", bundle: nil, fallbackLight: Color(red: 0.97, green: 0.98, blue: 0.98), fallbackDark: Color(red: 0.039, green: 0.055, blue: 0.071))
+        static let surface = Color("ThemeSurface", bundle: nil, fallbackLight: Color.white, fallbackDark: Color(red: 0.071, green: 0.094, blue: 0.114))
+        static let surfaceElevated = Color("ThemeSurfaceElevated", bundle: nil, fallbackLight: Color.white, fallbackDark: Color(red: 0.094, green: 0.122, blue: 0.149))
         static let border = Color("ThemeBorder", bundle: nil, fallbackLight: Color.black.opacity(0.08), fallbackDark: Color.white.opacity(0.08))
         static let borderStrong = Color("ThemeBorderStrong", bundle: nil, fallbackLight: Color.black.opacity(0.14), fallbackDark: Color.white.opacity(0.16))
 
@@ -19,41 +19,32 @@ enum Theme {
         static let textSecondary = Color("ThemeTextSecondary", bundle: nil, fallbackLight: Color(red: 0.40, green: 0.40, blue: 0.45), fallbackDark: Color.white.opacity(0.62))
         static let textTertiary = Color("ThemeTextTertiary", bundle: nil, fallbackLight: Color(red: 0.55, green: 0.55, blue: 0.60), fallbackDark: Color.white.opacity(0.40))
 
-        static let accent = Color(red: 0.486, green: 0.380, blue: 1.0) // #7C61FF
-        static let accentSoft = Color(red: 0.612, green: 0.510, blue: 1.0) // #9C82FF
-        static let glow = Color(red: 0.541, green: 0.341, blue: 0.969) // #8A57F7
-        static let warm = Color(red: 1.0, green: 0.541, blue: 0.349) // #FF8A59 (orange unread dot)
-        static let warmSoft = Color(red: 1.0, green: 0.671, blue: 0.467) // #FFAB77
+        static let accent = Color(red: 0.078, green: 0.580, blue: 0.541) // #14948A teal
+        static let accentSoft = Color(red: 0.149, green: 0.722, blue: 0.671) // #26B8AB
+        static let accentDeep = Color(red: 0.180, green: 0.224, blue: 0.443) // #2E3971 indigo
+        static let warm = Color(red: 0.976, green: 0.451, blue: 0.086) // #F97316 orange (unread dot)
+        static let warmSoft = Color(red: 0.984, green: 0.624, blue: 0.337) // #FB9F56
     }
 
     enum Gradients {
-        static var orb: LinearGradient {
+        /// Primary CTA / button gradient: teal → deep indigo. Calm, professional, no glow.
+        static var primary: LinearGradient {
             LinearGradient(
                 colors: [
-                    Color(red: 0.541, green: 0.341, blue: 0.969).opacity(0.95),
-                    Color(red: 1.0, green: 0.541, blue: 0.349).opacity(0.85)
+                    Color(red: 0.149, green: 0.722, blue: 0.671), // #26B8AB
+                    Color(red: 0.180, green: 0.224, blue: 0.443)  // #2E3971
                 ],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
         }
 
-        static var voiceButton: LinearGradient {
+        /// Subtle gradient for avatars and accents.
+        static var accent: LinearGradient {
             LinearGradient(
                 colors: [
-                    Color(red: 0.612, green: 0.510, blue: 1.0),
-                    Color(red: 0.412, green: 0.290, blue: 0.953)
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-        }
-
-        static var pulseCardBorder: LinearGradient {
-            LinearGradient(
-                colors: [
-                    Color(red: 0.612, green: 0.510, blue: 1.0).opacity(0.55),
-                    Color(red: 1.0, green: 0.541, blue: 0.349).opacity(0.30)
+                    Color(red: 0.149, green: 0.722, blue: 0.671),
+                    Color(red: 0.078, green: 0.580, blue: 0.541)
                 ],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing

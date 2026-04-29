@@ -19,7 +19,6 @@ struct MailboxView: View {
     @State private var isLoading = false
     @State private var errorMessage: String?
     @State private var isShowingComposer = false
-    @State private var isShowingVoice = false
     @State private var autoRefreshTask: Task<Void, Never>?
     @State private var searchTask: Task<Void, Never>?
 
@@ -36,7 +35,7 @@ struct MailboxView: View {
                             .padding(.horizontal, 24)
                             .padding(.top, 8)
 
-                        GreetingBlock(name: session.displayName)
+                        GreetingBlock(name: session.displayName, unreadCount: unreadCount)
                             .padding(.horizontal, 24)
 
                         AccountSearchBar(
@@ -55,13 +54,6 @@ struct MailboxView: View {
                         )
                         .padding(.horizontal, 20)
 
-                        AIPulseCard(
-                            important: importantCount,
-                            needsReply: needsReplyCount,
-                            updates: updatesCount
-                        )
-                        .padding(.horizontal, 20)
-
                         EmailListSection(
                             emails: emails,
                             isLoading: isLoading,
@@ -75,14 +67,9 @@ struct MailboxView: View {
                     .padding(.top, 4)
                 }
                 .scrollIndicators(.hidden)
-                .background(
-                    GradientOrbBackground()
-                        .ignoresSafeArea()
-                )
 
                 BottomActionBar(
                     onMail: { /* already in mail */ },
-                    onVoice: { isShowingVoice = true },
                     onCompose: { isShowingComposer = true }
                 )
                 .padding(.horizontal, 28)
@@ -128,9 +115,6 @@ struct MailboxView: View {
                     }
                 }
             }
-            .sheet(isPresented: $isShowingVoice) {
-                VoiceAssistantSheet()
-            }
             .refreshable {
                 await loadEmails()
             }
@@ -139,9 +123,6 @@ struct MailboxView: View {
     }
 
     private var unreadCount: Int { emails.filter { !$0.isRead }.count }
-    private var importantCount: Int { emails.filter { $0.isStarred }.count }
-    private var needsReplyCount: Int { max(unreadCount - importantCount, 0) }
-    private var updatesCount: Int { emails.count }
 
     private func loadAccounts() async {
         do {
@@ -316,6 +297,7 @@ private struct FluxHeader: View {
 
 private struct GreetingBlock: View {
     let name: String
+    let unreadCount: Int
 
     private var greeting: String {
         let hour = Calendar.current.component(.hour, from: .now)
@@ -327,122 +309,24 @@ private struct GreetingBlock: View {
         }
     }
 
-    private var greetingIcon: String {
-        let hour = Calendar.current.component(.hour, from: .now)
-        switch hour {
-        case 5..<17: return "sun.max.fill"
-        case 17..<20: return "sun.haze.fill"
-        default: return "moon.stars.fill"
+    private var subtitle: String {
+        switch unreadCount {
+        case 0: return "You're all caught up."
+        case 1: return "1 unread message"
+        default: return "\(unreadCount) unread messages"
         }
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 10) {
-                Text("\(greeting), \(name)")
-                    .font(.system(size: 30, weight: .semibold))
-                    .foregroundStyle(Theme.Palette.textPrimary)
-
-                Image(systemName: greetingIcon)
-                    .font(.system(size: 22))
-                    .foregroundStyle(Theme.Palette.warmSoft)
-            }
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text("You're all caught up.")
-                    .font(.system(size: 17, weight: .regular))
-                    .foregroundStyle(Theme.Palette.textSecondary)
-                Text("2 important · 5 updates")
-                    .font(.system(size: 14))
-                    .foregroundStyle(Theme.Palette.textTertiary)
-            }
-        }
-    }
-}
-
-// MARK: - AI Pulse Card
-
-private struct AIPulseCard: View {
-    let important: Int
-    let needsReply: Int
-    let updates: Int
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("AI PULSE")
-                    .font(.system(size: 11, weight: .semibold))
-                    .tracking(1.6)
-                    .foregroundStyle(Theme.Palette.warmSoft)
-                Text("Here's what matters today")
-                    .font(.system(size: 15, weight: .regular))
-                    .foregroundStyle(Theme.Palette.textSecondary)
-            }
-
-            HStack(spacing: 0) {
-                PulseStat(value: important, label: "Important")
-                PulseDivider()
-                PulseStat(value: needsReply, label: "Needs Reply")
-                PulseDivider()
-                PulseStat(value: updates, label: "Updates")
-            }
-
-            Button {
-                // Pulse brief sheet — wire up later
-            } label: {
-                HStack {
-                    Text("View Pulse Brief")
-                        .font(.system(size: 15, weight: .medium))
-                    Spacer()
-                    Image(systemName: "arrow.right")
-                        .font(.system(size: 14, weight: .semibold))
-                }
-                .padding(.horizontal, 18)
-                .padding(.vertical, 14)
-                .foregroundStyle(Theme.Palette.textPrimary)
-                .background(Theme.Palette.surfaceElevated)
-                .overlay(
-                    RoundedRectangle(cornerRadius: Theme.Radius.button, style: .continuous)
-                        .strokeBorder(Theme.Palette.border, lineWidth: 1)
-                )
-                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.button, style: .continuous))
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(20)
-        .background(
-            RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
-                .fill(Theme.Palette.surface.opacity(0.55))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
-                .strokeBorder(Theme.Gradients.pulseCardBorder, lineWidth: 1)
-        )
-    }
-}
-
-private struct PulseStat: View {
-    let value: Int
-    let label: String
-
-    var body: some View {
-        VStack(spacing: 6) {
-            Text("\(value)")
+        VStack(alignment: .leading, spacing: 8) {
+            Text("\(greeting), \(name)")
                 .font(.system(size: 30, weight: .semibold))
                 .foregroundStyle(Theme.Palette.textPrimary)
-            Text(label)
-                .font(.system(size: 12))
-                .foregroundStyle(Theme.Palette.textTertiary)
-        }
-        .frame(maxWidth: .infinity)
-    }
-}
 
-private struct PulseDivider: View {
-    var body: some View {
-        Rectangle()
-            .fill(Theme.Palette.border)
-            .frame(width: 1, height: 36)
+            Text(subtitle)
+                .font(.system(size: 15))
+                .foregroundStyle(Theme.Palette.textSecondary)
+        }
     }
 }
 
@@ -557,11 +441,11 @@ private struct AvatarView: View {
     private var seedColor: Color {
         let hash = abs(name.hashValue)
         let palette: [Color] = [
-            Color(red: 0.49, green: 0.38, blue: 1.0),
-            Color(red: 0.95, green: 0.55, blue: 0.35),
-            Color(red: 0.30, green: 0.72, blue: 0.65),
-            Color(red: 0.85, green: 0.40, blue: 0.65),
-            Color(red: 0.40, green: 0.55, blue: 0.95)
+            Color(red: 0.078, green: 0.580, blue: 0.541), // teal
+            Color(red: 0.180, green: 0.420, blue: 0.580), // ocean
+            Color(red: 0.290, green: 0.341, blue: 0.541), // indigo
+            Color(red: 0.400, green: 0.620, blue: 0.580), // sage
+            Color(red: 0.180, green: 0.224, blue: 0.443)  // deep blue
         ]
         return palette[hash % palette.count]
     }
@@ -570,7 +454,7 @@ private struct AvatarView: View {
         Circle()
             .fill(
                 LinearGradient(
-                    colors: [seedColor.opacity(0.85), seedColor.opacity(0.55)],
+                    colors: [seedColor.opacity(0.95), seedColor.opacity(0.65)],
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing
                 )
@@ -588,147 +472,63 @@ private struct AvatarView: View {
 
 private struct BottomActionBar: View {
     let onMail: () -> Void
-    let onVoice: () -> Void
     let onCompose: () -> Void
 
     var body: some View {
-        HStack {
-            BarIconButton(systemName: "envelope.fill", action: onMail)
+        HStack(spacing: 8) {
+            BarIconButton(systemName: "envelope.fill", isActive: true, action: onMail)
             Spacer()
-            VoiceButton(action: onVoice)
-            Spacer()
-            BarIconButton(systemName: "square.and.pencil", action: onCompose)
+            ComposeButton(action: onCompose)
         }
-        .padding(.horizontal, 28)
-        .padding(.vertical, 14)
+        .padding(.leading, 18)
+        .padding(.trailing, 8)
+        .padding(.vertical, 8)
         .background(
             Capsule(style: .continuous)
-                .fill(Theme.Palette.surface.opacity(0.85))
+                .fill(Theme.Palette.surface.opacity(0.92))
                 .overlay(
                     Capsule(style: .continuous)
                         .strokeBorder(Theme.Palette.border, lineWidth: 1)
                 )
-                .shadow(color: .black.opacity(0.25), radius: 30, x: 0, y: 12)
+                .shadow(color: .black.opacity(0.18), radius: 24, x: 0, y: 10)
         )
     }
 }
 
 private struct BarIconButton: View {
     let systemName: String
+    var isActive: Bool = false
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.system(size: 20, weight: .regular))
-                .foregroundStyle(Theme.Palette.textPrimary)
+                .font(.system(size: 19, weight: .regular))
+                .foregroundStyle(isActive ? Theme.Palette.accent : Theme.Palette.textSecondary)
                 .frame(width: 44, height: 44)
         }
         .buttonStyle(.plain)
     }
 }
 
-private struct VoiceButton: View {
+private struct ComposeButton: View {
     let action: () -> Void
-    @State private var pulse = false
 
     var body: some View {
         Button(action: action) {
-            ZStack {
-                Circle()
-                    .fill(Theme.Gradients.voiceButton)
-                    .frame(width: 64, height: 64)
-                    .shadow(color: Theme.Palette.accent.opacity(0.55), radius: 18, x: 0, y: 8)
-
-                Image(systemName: "waveform")
-                    .font(.system(size: 22, weight: .medium))
-                    .foregroundStyle(.white)
-                    .symbolEffect(.variableColor.iterative, options: .repeating, isActive: pulse)
+            HStack(spacing: 8) {
+                Image(systemName: "square.and.pencil")
+                    .font(.system(size: 15, weight: .semibold))
+                Text("Compose")
+                    .font(.system(size: 14, weight: .semibold))
             }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 12)
+            .background(Theme.Gradients.primary)
+            .clipShape(Capsule())
         }
         .buttonStyle(.plain)
-        .onAppear { pulse = true }
-    }
-}
-
-// MARK: - Background Orb
-
-private struct GradientOrbBackground: View {
-    var body: some View {
-        GeometryReader { proxy in
-            ZStack {
-                Circle()
-                    .fill(Theme.Gradients.orb)
-                    .frame(width: proxy.size.width * 0.85, height: proxy.size.width * 0.85)
-                    .blur(radius: 60)
-                    .opacity(0.55)
-                    .offset(x: proxy.size.width * 0.30, y: -proxy.size.width * 0.10)
-
-                Circle()
-                    .fill(Theme.Palette.accent.opacity(0.35))
-                    .frame(width: proxy.size.width * 0.50, height: proxy.size.width * 0.50)
-                    .blur(radius: 80)
-                    .offset(x: -proxy.size.width * 0.30, y: proxy.size.height * 0.55)
-            }
-        }
-        .allowsHitTesting(false)
-    }
-}
-
-// MARK: - Voice Sheet (placeholder)
-
-private struct VoiceAssistantSheet: View {
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        ZStack {
-            Theme.Palette.background.ignoresSafeArea()
-
-            VStack(spacing: 28) {
-                Capsule()
-                    .fill(Theme.Palette.borderStrong)
-                    .frame(width: 36, height: 4)
-                    .padding(.top, 10)
-
-                Spacer()
-
-                ZStack {
-                    ForEach(0..<3) { index in
-                        Circle()
-                            .strokeBorder(Theme.Palette.accent.opacity(0.3 - Double(index) * 0.08), lineWidth: 1)
-                            .frame(width: CGFloat(140 + index * 60))
-                    }
-
-                    Image(systemName: "sparkles")
-                        .font(.system(size: 40, weight: .light))
-                        .foregroundStyle(Theme.Palette.accent)
-                }
-
-                Text("How can I help you today?")
-                    .font(.system(size: 22, weight: .medium))
-                    .foregroundStyle(Theme.Palette.textPrimary)
-
-                Text("Tap to speak, or type below.")
-                    .font(.system(size: 14))
-                    .foregroundStyle(Theme.Palette.textSecondary)
-
-                Spacer()
-
-                Button {
-                    dismiss()
-                } label: {
-                    Text("Close")
-                        .font(.system(size: 15, weight: .medium))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 14)
-                        .foregroundStyle(.white)
-                        .background(Theme.Gradients.voiceButton)
-                        .clipShape(Capsule())
-                }
-                .padding(.horizontal, 24)
-                .padding(.bottom, 24)
-            }
-        }
     }
 }
 

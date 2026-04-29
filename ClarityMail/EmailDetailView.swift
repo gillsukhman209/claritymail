@@ -30,8 +30,6 @@ struct EmailDetailView: View {
                 VStack(alignment: .leading, spacing: 22) {
                     headerSection
 
-                    summaryCard
-
                     if let errorMessage {
                         Text(errorMessage)
                             .font(.system(size: 13))
@@ -113,12 +111,7 @@ struct EmailDetailView: View {
     }
 
     private var headerSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("PRIORITY")
-                .font(.system(size: 11, weight: .semibold))
-                .tracking(1.4)
-                .foregroundStyle(Theme.Palette.warmSoft)
-
+        VStack(alignment: .leading, spacing: 12) {
             Text(visibleEmail.subject)
                 .font(.system(size: 24, weight: .semibold))
                 .foregroundStyle(Theme.Palette.textPrimary)
@@ -151,35 +144,6 @@ struct EmailDetailView: View {
                 Spacer()
             }
         }
-    }
-
-    private var summaryCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                Image(systemName: "sparkles")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Theme.Palette.accentSoft)
-                Text("FLUX SUMMARY")
-                    .font(.system(size: 11, weight: .semibold))
-                    .tracking(1.4)
-                    .foregroundStyle(Theme.Palette.accentSoft)
-            }
-
-            Text("AI summary will appear here once the OpenAI route is connected.")
-                .font(.system(size: 14))
-                .foregroundStyle(Theme.Palette.textSecondary)
-                .lineSpacing(2)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(18)
-        .background(
-            RoundedRectangle(cornerRadius: Theme.Radius.row, style: .continuous)
-                .fill(Theme.Palette.surface.opacity(0.6))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: Theme.Radius.row, style: .continuous)
-                .strokeBorder(Theme.Gradients.pulseCardBorder, lineWidth: 1)
-        )
     }
 
     private var initials: String {
