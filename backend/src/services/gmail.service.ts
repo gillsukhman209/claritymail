@@ -18,6 +18,10 @@ function getOAuthClient(account: GmailAccount) {
   return oauth2Client;
 }
 
+function getGmailClient(account: GmailAccount) {
+  return google.gmail({ version: "v1", auth: getOAuthClient(account) });
+}
+
 function headerValue(headers: Array<{ name?: string | null; value?: string | null }> | undefined, name: string) {
   return headers?.find((header) => header.name?.toLowerCase() === name.toLowerCase())?.value ?? "";
 }
@@ -60,8 +64,7 @@ function findBodyPart(payload: any, mimeType: string): string | null {
 }
 
 export async function listInboxEmails(account: GmailAccount) {
-  const auth = getOAuthClient(account);
-  const gmail = google.gmail({ version: "v1", auth });
+  const gmail = getGmailClient(account);
 
   const listResponse = await gmail.users.messages.list({
     userId: "me",
@@ -101,8 +104,7 @@ export async function listInboxEmails(account: GmailAccount) {
 }
 
 export async function getEmail(account: GmailAccount, id: string) {
-  const auth = getOAuthClient(account);
-  const gmail = google.gmail({ version: "v1", auth });
+  const gmail = getGmailClient(account);
 
   const messageResponse = await gmail.users.messages.get({
     userId: "me",
@@ -128,4 +130,67 @@ export async function getEmail(account: GmailAccount, id: string) {
     isStarred: labelIds.includes("STARRED"),
     body
   };
+}
+
+export async function archiveEmail(account: GmailAccount, id: string) {
+  const gmail = getGmailClient(account);
+  await gmail.users.messages.modify({
+    userId: "me",
+    id,
+    requestBody: {
+      removeLabelIds: ["INBOX"]
+    }
+  });
+}
+
+export async function trashEmail(account: GmailAccount, id: string) {
+  const gmail = getGmailClient(account);
+  await gmail.users.messages.trash({
+    userId: "me",
+    id
+  });
+}
+
+export async function markEmailRead(account: GmailAccount, id: string) {
+  const gmail = getGmailClient(account);
+  await gmail.users.messages.modify({
+    userId: "me",
+    id,
+    requestBody: {
+      removeLabelIds: ["UNREAD"]
+    }
+  });
+}
+
+export async function markEmailUnread(account: GmailAccount, id: string) {
+  const gmail = getGmailClient(account);
+  await gmail.users.messages.modify({
+    userId: "me",
+    id,
+    requestBody: {
+      addLabelIds: ["UNREAD"]
+    }
+  });
+}
+
+export async function starEmail(account: GmailAccount, id: string) {
+  const gmail = getGmailClient(account);
+  await gmail.users.messages.modify({
+    userId: "me",
+    id,
+    requestBody: {
+      addLabelIds: ["STARRED"]
+    }
+  });
+}
+
+export async function unstarEmail(account: GmailAccount, id: string) {
+  const gmail = getGmailClient(account);
+  await gmail.users.messages.modify({
+    userId: "me",
+    id,
+    requestBody: {
+      removeLabelIds: ["STARRED"]
+    }
+  });
 }

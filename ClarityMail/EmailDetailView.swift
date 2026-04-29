@@ -11,6 +11,7 @@ struct EmailDetailView: View {
     let email: Email
     @State private var loadedEmail: Email?
     @State private var isLoading = false
+    @State private var isPerformingAction = false
     @State private var errorMessage: String?
 
     private let apiClient = APIClient()
@@ -58,6 +59,43 @@ struct EmailDetailView: View {
             .padding()
         }
         .navigationTitle(visibleEmail.subject)
+        .toolbar {
+            Button {
+                Task {
+                    await toggleStar()
+                }
+            } label: {
+                Label(visibleEmail.isStarred ? "Unstar" : "Star", systemImage: visibleEmail.isStarred ? "star.fill" : "star")
+            }
+            .disabled(isPerformingAction)
+
+            Button {
+                Task {
+                    await toggleRead()
+                }
+            } label: {
+                Label(visibleEmail.isRead ? "Mark Unread" : "Mark Read", systemImage: visibleEmail.isRead ? "envelope.badge" : "envelope.open")
+            }
+            .disabled(isPerformingAction)
+
+            Button {
+                Task {
+                    await archive()
+                }
+            } label: {
+                Label("Archive", systemImage: "archivebox")
+            }
+            .disabled(isPerformingAction)
+
+            Button(role: .destructive) {
+                Task {
+                    await trash()
+                }
+            } label: {
+                Label("Trash", systemImage: "trash")
+            }
+            .disabled(isPerformingAction)
+        }
         .task(id: email.id) {
             await loadEmail()
         }
@@ -72,6 +110,64 @@ struct EmailDetailView: View {
             errorMessage = nil
         } catch {
             errorMessage = "Could not load email body."
+        }
+    }
+
+    private func toggleStar() async {
+        await performAction {
+            if visibleEmail.isStarred {
+                try await apiClient.unstarEmail(id: visibleEmail.id)
+            } else {
+                try await apiClient.starEmail(id: visibleEmail.id)
+            }
+        }
+
+        if loadedEmail != nil {
+            loadedEmail?.isStarred.toggle()
+        } else {
+            loadedEmail = email
+            loadedEmail?.isStarred.toggle()
+        }
+    }
+
+    private func toggleRead() async {
+        await performAction {
+            if visibleEmail.isRead {
+                try await apiClient.markEmailUnread(id: visibleEmail.id)
+            } else {
+                try await apiClient.markEmailRead(id: visibleEmail.id)
+            }
+        }
+
+        if loadedEmail != nil {
+            loadedEmail?.isRead.toggle()
+        } else {
+            loadedEmail = email
+            loadedEmail?.isRead.toggle()
+        }
+    }
+
+    private func archive() async {
+        await performAction {
+            try await apiClient.archiveEmail(id: visibleEmail.id)
+        }
+    }
+
+    private func trash() async {
+        await performAction {
+            try await apiClient.trashEmail(id: visibleEmail.id)
+        }
+    }
+
+    private func performAction(_ action: () async throws -> Void) async {
+        isPerformingAction = true
+        defer { isPerformingAction = false }
+
+        do {
+            try await action()
+            errorMessage = nil
+        } catch {
+            errorMessage = "Could not update email."
         }
     }
 }
