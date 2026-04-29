@@ -4,6 +4,7 @@ import cors from "cors";
 import { authRoutes } from "./routes/auth.routes.js";
 import { emailRoutes } from "./routes/email.routes.js";
 import { healthRoutes } from "./routes/health.routes.js";
+import { realtimeRoutes } from "./routes/realtime.routes.js";
 
 dotenv.config({ override: true });
 
@@ -15,6 +16,7 @@ app.use(express.json());
 app.use(healthRoutes);
 app.use("/auth", authRoutes);
 app.use(emailRoutes);
+app.use(realtimeRoutes);
 
 const port = Number(process.env.PORT ?? 3000);
 

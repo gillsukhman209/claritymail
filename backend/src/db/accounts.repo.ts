@@ -75,3 +75,60 @@ export async function getLatestGoogleAccount() {
     refreshToken: decryptText(encryptedRefreshToken)
   };
 }
+
+export async function getGoogleAccountByEmail(email: string) {
+  const db = getFirestore();
+  const snapshot = await db
+    .collection("gmailAccounts")
+    .where("email", "==", email)
+    .limit(1)
+    .get();
+
+  const doc = snapshot.docs[0];
+  if (!doc) {
+    return null;
+  }
+
+  const data = doc.data();
+  const encryptedRefreshToken = data.encryptedRefreshToken;
+
+  if (typeof encryptedRefreshToken !== "string") {
+    throw new Error("Connected Gmail account is missing a refresh token.");
+  }
+
+  return {
+    id: doc.id,
+    email: String(data.email),
+    refreshToken: decryptText(encryptedRefreshToken),
+    lastHistoryId: typeof data.lastHistoryId === "string" ? data.lastHistoryId : null
+  };
+}
+
+export async function updateGmailWatchState(
+  accountId: string,
+  input: { historyId: string; expiration?: string | null }
+) {
+  const db = getFirestore();
+  await db.collection("gmailAccounts").doc(accountId).set(
+    {
+      lastHistoryId: input.historyId,
+      watchExpiration: input.expiration ?? null,
+      watchUpdatedAt: new Date(),
+      updatedAt: new Date()
+    },
+    { merge: true }
+  );
+}
+
+export async function saveGmailSyncEvent(input: {
+  accountId: string;
+  email: string;
+  historyId: string;
+  messageIds: string[];
+}) {
+  const db = getFirestore();
+  await db.collection("gmailSyncEvents").add({
+    ...input,
+    createdAt: new Date()
+  });
+}

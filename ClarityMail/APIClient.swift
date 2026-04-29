@@ -81,6 +81,10 @@ struct APIClient {
         )
     }
 
+    func startRealtimeSync() async throws {
+        try await post("/gmail/watch")
+    }
+
     private func get<T: Decodable>(_ path: String) async throws -> T {
         let url = baseURL.appending(path: path)
         let (data, response) = try await URLSession.shared.data(from: url)

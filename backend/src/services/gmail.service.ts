@@ -1,7 +1,10 @@
 import { google } from "googleapis";
 
 type GmailAccount = {
+  id?: string;
+  email?: string;
   refreshToken: string;
+  lastHistoryId?: string | null;
 };
 
 function getOAuthClient(account: GmailAccount) {
@@ -258,5 +261,58 @@ export async function replyToEmail(account: GmailAccount, input: { to: string; s
   return {
     id: result.data.id,
     threadId: result.data.threadId
+  };
+}
+
+export async function startGmailWatch(account: GmailAccount) {
+  const topicName = process.env.GMAIL_PUBSUB_TOPIC;
+
+  if (!topicName) {
+    throw new Error("Missing GMAIL_PUBSUB_TOPIC.");
+  }
+
+  const gmail = getGmailClient(account);
+  const result = await gmail.users.watch({
+    userId: "me",
+    requestBody: {
+      topicName,
+      labelIds: ["INBOX"]
+    }
+  });
+
+  return {
+    historyId: result.data.historyId ?? "",
+    expiration: result.data.expiration ?? null
+  };
+}
+
+export async function listGmailHistory(account: GmailAccount, startHistoryId: string) {
+  const gmail = getGmailClient(account);
+  const result = await gmail.users.history.list({
+    userId: "me",
+    startHistoryId,
+    historyTypes: ["messageAdded", "labelAdded", "labelRemoved"]
+  });
+
+  const history = result.data.history ?? [];
+  const messageIds = new Set<string>();
+
+  for (const item of history) {
+    for (const added of item.messagesAdded ?? []) {
+      if (added.message?.id) messageIds.add(added.message.id);
+    }
+
+    for (const labelAdded of item.labelsAdded ?? []) {
+      if (labelAdded.message?.id) messageIds.add(labelAdded.message.id);
+    }
+
+    for (const labelRemoved of item.labelsRemoved ?? []) {
+      if (labelRemoved.message?.id) messageIds.add(labelRemoved.message.id);
+    }
+  }
+
+  return {
+    historyId: result.data.historyId ?? startHistoryId,
+    messageIds: Array.from(messageIds)
   };
 }

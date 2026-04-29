@@ -14,6 +14,7 @@ struct MailboxView: View {
     @State private var isLoading = false
     @State private var errorMessage: String?
     @State private var isShowingComposer = false
+    @State private var autoRefreshTask: Task<Void, Never>?
 
     private let apiClient = APIClient()
 
@@ -60,6 +61,11 @@ struct MailboxView: View {
             }
             .task {
                 await loadEmails()
+                await startRealtimeSync()
+                startAutoRefresh()
+            }
+            .onDisappear {
+                autoRefreshTask?.cancel()
             }
             .sheet(isPresented: $isShowingComposer) {
                 NavigationStack {
@@ -89,6 +95,25 @@ struct MailboxView: View {
             errorMessage = nil
         } catch {
             errorMessage = "Could not load inbox."
+        }
+    }
+
+    private func startRealtimeSync() async {
+        do {
+            try await apiClient.startRealtimeSync()
+        } catch {
+            errorMessage = "Could not start realtime sync."
+        }
+    }
+
+    private func startAutoRefresh() {
+        autoRefreshTask?.cancel()
+        autoRefreshTask = Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(20))
+                if Task.isCancelled { return }
+                await loadEmails()
+            }
         }
     }
 }
