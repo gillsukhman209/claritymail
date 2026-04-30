@@ -21,6 +21,10 @@ struct MailboxView: View {
     @State private var errorMessage: String?
     @State private var isShowingComposer = false
     @State private var isShowingBlockedSenders = false
+    @State private var isShowingSettings = false
+    @State private var draftToEdit: Email?
+    @State private var nextPageToken: String?
+    @State private var isLoadingMore = false
     @State private var autoRefreshTask: Task<Void, Never>?
     @State private var searchTask: Task<Void, Never>?
     @State private var knownEmailIds = Set<String>()
@@ -58,15 +62,30 @@ struct MailboxView: View {
                             },
                             onManageBlockedSenders: {
                                 isShowingBlockedSenders = true
-                            }
+                            },
+                            onOpenSettings: {
+                                isShowingSettings = true
+                            },
+                            isSearching: isLoading && !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                         )
                         .padding(.horizontal, 20)
 
                         EmailListSection(
                             emails: emails,
                             isLoading: isLoading,
+                            isLoadingMore: isLoadingMore,
+                            canLoadMore: nextPageToken != nil,
                             errorMessage: errorMessage,
-                            onSelect: { selectedEmail = $0 }
+                            onSelect: { email in
+                                if selectedFolder == .drafts || email.draftId != nil {
+                                    draftToEdit = email
+                                } else {
+                                    selectedEmail = email
+                                }
+                            },
+                            onLoadMore: {
+                                Task { await loadMoreEmails() }
+                            }
                         )
                         .padding(.horizontal, 20)
 
@@ -101,11 +120,36 @@ struct MailboxView: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                     .zIndex(20)
                 }
+
+                if let draftToEdit {
+                    ComposerView(
+                        mode: .draft(draftToEdit),
+                        accountId: selectedAccountId ?? draftToEdit.accountId,
+                        accounts: accounts,
+                        onSent: {
+                            Task { await loadEmails() }
+                        },
+                        onClose: {
+                            self.draftToEdit = nil
+                        }
+                    )
+                    .padding(.trailing, 24)
+                    .padding(.bottom, 24)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .zIndex(20)
+                }
+            }
+            .overlay(alignment: .bottomTrailing) {
+                UndoSendToast()
+                    .padding(.trailing, 28)
+                    .padding(.bottom, 88)
+                    .zIndex(30)
             }
             .animation(.snappy(duration: 0.2), value: isShowingComposer)
+            .animation(.snappy(duration: 0.2), value: draftToEdit)
             .modifier(HideNavigationBarModifier())
             .navigationDestination(item: $selectedEmail) { email in
-                EmailDetailView(email: email, accountId: selectedAccountId ?? email.accountId) { blockedSender in
+                EmailDetailView(email: email, accountId: selectedAccountId ?? email.accountId, accounts: accounts) { blockedSender in
                     emails.removeAll {
                         $0.senderEmailAddress.caseInsensitiveCompare(blockedSender) == .orderedSame
                     }
@@ -122,6 +166,7 @@ struct MailboxView: View {
                 selectedEmail = nil
                 knownEmailIds.removeAll()
                 hasLoadedInitialEmails = false
+                nextPageToken = nil
                 Task {
                     await loadEmails()
                     await startRealtimeSync()
@@ -131,6 +176,7 @@ struct MailboxView: View {
                 selectedEmail = nil
                 knownEmailIds.removeAll()
                 hasLoadedInitialEmails = false
+                nextPageToken = nil
                 Task {
                     await loadEmails()
                 }
@@ -140,6 +186,7 @@ struct MailboxView: View {
                 searchTask = Task {
                     try? await Task.sleep(for: .milliseconds(350))
                     if Task.isCancelled { return }
+                    nextPageToken = nil
                     await loadEmails()
                 }
             }
@@ -154,7 +201,16 @@ struct MailboxView: View {
             .sheet(isPresented: $isShowingBlockedSenders) {
                 BlockedSendersView(accountId: selectedAccountId)
             }
+            .sheet(isPresented: $isShowingSettings) {
+                SettingsView(accounts: accounts) {
+                    Task {
+                        await loadAccounts()
+                        await loadEmails()
+                    }
+                }
+            }
             .refreshable {
+                nextPageToken = nil
                 await loadEmails(notifyForNewEmails: false)
             }
         }
@@ -180,7 +236,8 @@ struct MailboxView: View {
         defer { isLoading = false }
 
         do {
-            let fetchedEmails = try await apiClient.emails(accountId: selectedAccountId, searchQuery: searchText, folder: selectedFolder)
+            let page = try await apiClient.emails(accountId: selectedAccountId, searchQuery: searchText, folder: selectedFolder)
+            let fetchedEmails = page.emails
             let fetchedIds = Set(fetchedEmails.map(\.id))
 
             if shouldNotifyForNewEmails(notifyForNewEmails: notifyForNewEmails) {
@@ -194,11 +251,35 @@ struct MailboxView: View {
             }
 
             emails = fetchedEmails
+            nextPageToken = page.nextPageToken
             knownEmailIds = fetchedIds
             hasLoadedInitialEmails = true
             errorMessage = nil
         } catch {
             errorMessage = "Could not load inbox."
+        }
+    }
+
+    private func loadMoreEmails() async {
+        guard let nextPageToken, !isLoadingMore, !isLoading else { return }
+        isLoadingMore = true
+        defer { isLoadingMore = false }
+
+        do {
+            let page = try await apiClient.emails(
+                accountId: selectedAccountId,
+                searchQuery: searchText,
+                folder: selectedFolder,
+                pageToken: nextPageToken
+            )
+            emails.append(contentsOf: page.emails.filter { newEmail in
+                !emails.contains(where: { $0.id == newEmail.id })
+            })
+            self.nextPageToken = page.nextPageToken
+            knownEmailIds.formUnion(page.emails.map(\.id))
+            errorMessage = nil
+        } catch {
+            errorMessage = "Could not load more emails."
         }
     }
 
@@ -239,6 +320,8 @@ private struct AccountSearchBar: View {
     let onAddAccount: () -> Void
     let onRefreshAccounts: () -> Void
     let onManageBlockedSenders: () -> Void
+    let onOpenSettings: () -> Void
+    let isSearching: Bool
 
     private var selectedAccount: GmailAccount? {
         guard let selectedAccountId else { return nil }
@@ -307,6 +390,10 @@ private struct AccountSearchBar: View {
                     Button(action: onManageBlockedSenders) {
                         Label("Blocked Senders", systemImage: "hand.raised")
                     }
+
+                    Button(action: onOpenSettings) {
+                        Label("Settings", systemImage: "gearshape")
+                    }
                 } label: {
                     HStack(spacing: 8) {
                         Image(systemName: "person.crop.circle")
@@ -335,9 +422,15 @@ private struct AccountSearchBar: View {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(Theme.Palette.textTertiary)
 
-                TextField("Search inbox", text: $searchText)
+                TextField("Search \(selectedFolder.title.lowercased())", text: $searchText)
                     .textFieldStyle(.plain)
                     .foregroundStyle(Theme.Palette.textPrimary)
+
+                if isSearching {
+                    ProgressView()
+                        .scaleEffect(0.65)
+                        .frame(width: 18, height: 18)
+                }
 
                 if !searchText.isEmpty {
                     Button {
@@ -431,8 +524,11 @@ private struct GreetingBlock: View {
 private struct EmailListSection: View {
     let emails: [Email]
     let isLoading: Bool
+    let isLoadingMore: Bool
+    let canLoadMore: Bool
     let errorMessage: String?
     let onSelect: (Email) -> Void
+    let onLoadMore: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -456,6 +552,17 @@ private struct EmailListSection: View {
                             EmailRowView(email: email)
                         }
                         .buttonStyle(.plain)
+                    }
+
+                    if canLoadMore {
+                        ProgressView()
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 20)
+                            .onAppear(perform: onLoadMore)
+                    } else if isLoadingMore {
+                        ProgressView()
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 20)
                     }
                 }
             }

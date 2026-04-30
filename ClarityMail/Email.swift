@@ -11,9 +11,11 @@ struct Email: Identifiable, Hashable, Codable {
     let accountId: String?
     let accountEmail: String?
     let id: String
+    var draftId: String?
     let threadId: String
     let subject: String
     let sender: String
+    var to: String?
     let snippet: String
     let receivedAt: Date
     var isRead: Bool
@@ -110,11 +112,13 @@ struct Email: Identifiable, Hashable, Codable {
 
     enum CodingKeys: String, CodingKey {
         case id
+        case draftId
         case accountId
         case accountEmail
         case threadId
         case subject
         case sender
+        case to
         case snippet
         case receivedAt
         case isRead

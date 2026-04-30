@@ -7,7 +7,7 @@ type GmailAccount = {
   lastHistoryId?: string | null;
 };
 
-export type MailboxFolder = "inbox" | "sent" | "archive" | "trash";
+export type MailboxFolder = "inbox" | "sent" | "archive" | "trash" | "drafts";
 
 export type EmailAttachment = {
   filename: string;
@@ -19,7 +19,13 @@ type SendInput = {
   to: string;
   subject?: string;
   body: string;
+  htmlBody?: string;
   attachments?: EmailAttachment[];
+};
+
+export type EmailListResult = {
+  emails: any[];
+  nextPageToken: string | null;
 };
 
 function getOAuthClient(account: GmailAccount) {
@@ -76,16 +82,19 @@ function chunkBase64(value: string) {
 function buildRawEmail(input: SendInput) {
   const subject = input.subject ?? "";
   const attachments = input.attachments ?? [];
+  const hasHtml = Boolean(input.htmlBody);
+  const bodyContentType = hasHtml ? "text/html" : "text/plain";
+  const body = hasHtml ? input.htmlBody! : input.body;
 
   if (attachments.length === 0) {
     const lines = [
       `To: ${input.to}`,
       `Subject: ${encodeHeader(subject)}`,
       "MIME-Version: 1.0",
-      "Content-Type: text/plain; charset=utf-8",
+      `Content-Type: ${bodyContentType}; charset=utf-8`,
       "Content-Transfer-Encoding: 8bit",
       "",
-      input.body
+      body
     ];
 
     return encodeBase64Url(lines.join("\r\n"));
@@ -99,10 +108,10 @@ function buildRawEmail(input: SendInput) {
     `Content-Type: multipart/mixed; boundary="${boundary}"`,
     "",
     `--${boundary}`,
-    "Content-Type: text/plain; charset=utf-8",
+    `Content-Type: ${bodyContentType}; charset=utf-8`,
     "Content-Transfer-Encoding: 8bit",
     "",
-    input.body,
+    body,
     ""
   ];
 
@@ -177,6 +186,50 @@ function findAttachments(payload: any): Array<{ id: string; filename: string; mi
   return current.concat((payload.parts ?? []).flatMap((part: any) => findAttachments(part)));
 }
 
+function parseEmailFromMessage(account: GmailAccount, data: any) {
+  const headers = data.payload?.headers;
+  const labelIds = data.labelIds ?? [];
+  return {
+    accountId: account.id ?? "",
+    accountEmail: account.email ?? "",
+    id: data.id ?? "",
+    threadId: data.threadId ?? "",
+    subject: headerValue(headers, "Subject") || "(No subject)",
+    sender: headerValue(headers, "From") || headerValue(headers, "To") || "Unknown sender",
+    snippet: data.snippet ?? "",
+    receivedAt: new Date(Number(data.internalDate ?? Date.now())).toISOString(),
+    isRead: !labelIds.includes("UNREAD"),
+    isStarred: labelIds.includes("STARRED")
+  };
+}
+
+function parseFullEmailFromMessage(account: GmailAccount, data: any, draftId?: string) {
+  const headers = data.payload?.headers;
+  const labelIds = data.labelIds ?? [];
+  const plainText = findBodyPart(data.payload, "text/plain");
+  const html = findBodyPart(data.payload, "text/html");
+  const body = plainText?.trim() || (html ? stripHtml(html) : data.snippet ?? "");
+  const attachments = findAttachments(data.payload);
+
+  return {
+    accountId: account.id ?? "",
+    accountEmail: account.email ?? "",
+    id: data.id ?? "",
+    draftId: draftId ?? null,
+    threadId: data.threadId ?? "",
+    subject: headerValue(headers, "Subject") || "(No subject)",
+    sender: headerValue(headers, "From") || headerValue(headers, "To") || "Unknown sender",
+    to: headerValue(headers, "To") || "",
+    snippet: data.snippet ?? "",
+    receivedAt: new Date(Number(data.internalDate ?? Date.now())).toISOString(),
+    isRead: !labelIds.includes("UNREAD"),
+    isStarred: labelIds.includes("STARRED"),
+    body,
+    htmlBody: html?.trim() || null,
+    attachments
+  };
+}
+
 function mailboxListOptions(folder: MailboxFolder, query?: string) {
   const trimmedQuery = query?.trim();
 
@@ -185,6 +238,8 @@ function mailboxListOptions(folder: MailboxFolder, query?: string) {
       return { labelIds: ["SENT"], q: trimmedQuery || undefined };
     case "trash":
       return { labelIds: ["TRASH"], q: trimmedQuery || undefined };
+    case "drafts":
+      return { labelIds: ["DRAFT"], q: trimmedQuery || undefined };
     case "archive":
       return {
         labelIds: undefined,
@@ -198,16 +253,52 @@ function mailboxListOptions(folder: MailboxFolder, query?: string) {
 
 export async function listMailboxEmails(
   account: GmailAccount,
-  options: { query?: string; folder?: MailboxFolder } = {}
-) {
+  options: { query?: string; folder?: MailboxFolder; pageToken?: string | null } = {}
+): Promise<EmailListResult> {
   const gmail = getGmailClient(account);
+  const folder = options.folder ?? "inbox";
+
+  if (folder === "drafts") {
+    const draftsResponse = await gmail.users.drafts.list({
+      userId: "me",
+      maxResults: 30,
+      pageToken: options.pageToken ?? undefined
+    });
+
+    const drafts = draftsResponse.data.drafts ?? [];
+    const emails = await Promise.all(
+      drafts.map(async (draft) => {
+        const draftResponse = await gmail.users.drafts.get({
+          userId: "me",
+          id: draft.id ?? "",
+          format: "full"
+        });
+
+        return parseFullEmailFromMessage(account, draftResponse.data.message, draft.id ?? "");
+      })
+    );
+
+    const trimmedQuery = options.query?.trim().toLowerCase();
+    return {
+      emails: trimmedQuery
+        ? emails.filter((email) =>
+            [email.subject, email.sender, email.to, email.snippet, email.body].some((value) =>
+              String(value ?? "").toLowerCase().includes(trimmedQuery)
+            )
+          )
+        : emails,
+      nextPageToken: draftsResponse.data.nextPageToken ?? null
+    };
+  }
+
   const listOptions = mailboxListOptions(options.folder ?? "inbox", options.query);
 
   const listResponse = await gmail.users.messages.list({
     userId: "me",
     labelIds: listOptions.labelIds,
     maxResults: 30,
-    q: listOptions.q
+    q: listOptions.q,
+    pageToken: options.pageToken ?? undefined
   });
 
   const messages = listResponse.data.messages ?? [];
@@ -221,26 +312,14 @@ export async function listMailboxEmails(
         metadataHeaders: ["Subject", "From", "Date"]
       });
 
-      const data = messageResponse.data;
-      const headers = data.payload?.headers;
-      const labelIds = data.labelIds ?? [];
-
-      return {
-        accountId: account.id ?? "",
-        accountEmail: account.email ?? "",
-        id: data.id ?? "",
-        threadId: data.threadId ?? "",
-        subject: headerValue(headers, "Subject") || "(No subject)",
-        sender: headerValue(headers, "From") || "Unknown sender",
-        snippet: data.snippet ?? "",
-        receivedAt: new Date(Number(data.internalDate ?? Date.now())).toISOString(),
-        isRead: !labelIds.includes("UNREAD"),
-        isStarred: labelIds.includes("STARRED")
-      };
+      return parseEmailFromMessage(account, messageResponse.data);
     })
   );
 
-  return emails;
+  return {
+    emails,
+    nextPageToken: listResponse.data.nextPageToken ?? null
+  };
 }
 
 export async function getEmail(account: GmailAccount, id: string) {
@@ -252,29 +331,20 @@ export async function getEmail(account: GmailAccount, id: string) {
     format: "full"
   });
 
-  const data = messageResponse.data;
-  const headers = data.payload?.headers;
-  const labelIds = data.labelIds ?? [];
-  const plainText = findBodyPart(data.payload, "text/plain");
-  const html = findBodyPart(data.payload, "text/html");
-  const body = plainText?.trim() || (html ? stripHtml(html) : data.snippet ?? "");
-  const attachments = findAttachments(data.payload);
+  return parseFullEmailFromMessage(account, messageResponse.data);
+}
 
-  return {
-    accountId: account.id ?? "",
-    accountEmail: account.email ?? "",
-    id: data.id ?? "",
-    threadId: data.threadId ?? "",
-    subject: headerValue(headers, "Subject") || "(No subject)",
-    sender: headerValue(headers, "From") || "Unknown sender",
-    snippet: data.snippet ?? "",
-    receivedAt: new Date(Number(data.internalDate ?? Date.now())).toISOString(),
-    isRead: !labelIds.includes("UNREAD"),
-    isStarred: labelIds.includes("STARRED"),
-    body,
-    htmlBody: html?.trim() || null,
-    attachments
-  };
+export async function getThread(account: GmailAccount, threadId: string) {
+  const gmail = getGmailClient(account);
+  const result = await gmail.users.threads.get({
+    userId: "me",
+    id: threadId,
+    format: "full"
+  });
+
+  return (result.data.messages ?? [])
+    .map((message) => parseFullEmailFromMessage(account, message))
+    .sort((left, right) => Date.parse(left.receivedAt) - Date.parse(right.receivedAt));
 }
 
 export async function getEmailAttachment(account: GmailAccount, messageId: string, attachmentId: string) {
@@ -434,6 +504,75 @@ export async function sendEmail(account: GmailAccount, input: SendInput) {
   };
 }
 
+export async function createDraft(account: GmailAccount, input: SendInput & { threadId?: string | null }) {
+  const gmail = getGmailClient(account);
+  const result = await gmail.users.drafts.create({
+    userId: "me",
+    requestBody: {
+      message: {
+        raw: buildRawEmail(input),
+        threadId: input.threadId ?? undefined
+      }
+    }
+  });
+
+  return {
+    id: result.data.id ?? "",
+    messageId: result.data.message?.id ?? "",
+    threadId: result.data.message?.threadId ?? ""
+  };
+}
+
+export async function updateDraft(account: GmailAccount, draftId: string, input: SendInput & { threadId?: string | null }) {
+  const gmail = getGmailClient(account);
+  const result = await gmail.users.drafts.update({
+    userId: "me",
+    id: draftId,
+    requestBody: {
+      id: draftId,
+      message: {
+        raw: buildRawEmail(input),
+        threadId: input.threadId ?? undefined
+      }
+    }
+  });
+
+  return {
+    id: result.data.id ?? draftId,
+    messageId: result.data.message?.id ?? "",
+    threadId: result.data.message?.threadId ?? ""
+  };
+}
+
+export async function sendDraft(account: GmailAccount, draftId: string, input?: SendInput & { threadId?: string | null }) {
+  const gmail = getGmailClient(account);
+  const result = await gmail.users.drafts.send({
+    userId: "me",
+    requestBody: input
+      ? {
+          id: draftId,
+          message: {
+            raw: buildRawEmail(input),
+            threadId: input.threadId ?? undefined
+          }
+        }
+      : { id: draftId }
+  });
+
+  return {
+    id: result.data.id,
+    threadId: result.data.threadId
+  };
+}
+
+export async function deleteDraft(account: GmailAccount, draftId: string) {
+  const gmail = getGmailClient(account);
+  await gmail.users.drafts.delete({
+    userId: "me",
+    id: draftId
+  });
+}
+
 export async function replyToEmail(account: GmailAccount, input: SendInput & { threadId: string }) {
   const gmail = getGmailClient(account);
   const subject = (input.subject ?? "").toLowerCase().startsWith("re:") ? (input.subject ?? "") : `Re: ${input.subject ?? ""}`;
@@ -444,6 +583,7 @@ export async function replyToEmail(account: GmailAccount, input: SendInput & { t
         to: input.to,
         subject,
         body: input.body,
+        htmlBody: input.htmlBody,
         attachments: input.attachments
       }),
       threadId: input.threadId

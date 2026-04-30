@@ -42,12 +42,21 @@ struct APIClient {
         )
     }
 
-    func emails(accountId: String? = nil, searchQuery: String? = nil, folder: MailboxFolder = .inbox) async throws -> [Email] {
+    func logoutAccount(id: String) async throws {
+        try await delete("/auth/accounts/\(id)")
+    }
+
+    func emails(
+        accountId: String? = nil,
+        searchQuery: String? = nil,
+        folder: MailboxFolder = .inbox,
+        pageToken: String? = nil
+    ) async throws -> EmailPage {
         let response: EmailsResponse = try await get(
             "/emails",
-            queryItems: accountQueryItems(accountId: accountId, searchQuery: searchQuery, folder: folder)
+            queryItems: accountQueryItems(accountId: accountId, searchQuery: searchQuery, folder: folder, pageToken: pageToken)
         )
-        return response.emails
+        return EmailPage(emails: response.emails, nextPageToken: response.nextPageToken)
     }
 
     func email(id: Email.ID, accountId: String? = nil) async throws -> Email {
@@ -56,6 +65,14 @@ struct APIClient {
             queryItems: accountQueryItems(accountId: accountId)
         )
         return response.email
+    }
+
+    func thread(id: String, accountId: String? = nil) async throws -> [Email] {
+        let response: EmailsResponse = try await get(
+            "/threads/\(id)",
+            queryItems: accountQueryItems(accountId: accountId)
+        )
+        return response.emails
     }
 
     func emailAttachment(messageId: Email.ID, attachmentId: String, accountId: String? = nil) async throws -> Data {
@@ -102,6 +119,7 @@ struct APIClient {
         to: String,
         subject: String,
         body: String,
+        htmlBody: String? = nil,
         accountId: String? = nil,
         attachments: [EmailAttachmentUpload] = []
     ) async throws {
@@ -112,9 +130,87 @@ struct APIClient {
                 to: to,
                 subject: subject,
                 body: body,
+                htmlBody: htmlBody,
                 attachments: attachments
             )
         )
+    }
+
+    func createDraft(
+        to: String,
+        subject: String,
+        body: String,
+        htmlBody: String? = nil,
+        accountId: String? = nil,
+        threadId: String? = nil,
+        attachments: [EmailAttachmentUpload] = []
+    ) async throws -> DraftSaveResult {
+        let response: DraftResponse = try await postJSONForResponse(
+            "/drafts",
+            body: DraftEmailRequest(
+                accountId: accountId,
+                to: to,
+                subject: subject,
+                body: body,
+                htmlBody: htmlBody,
+                threadId: threadId,
+                attachments: attachments
+            )
+        )
+        return response.draft
+    }
+
+    func updateDraft(
+        draftId: String,
+        to: String,
+        subject: String,
+        body: String,
+        htmlBody: String? = nil,
+        accountId: String? = nil,
+        threadId: String? = nil,
+        attachments: [EmailAttachmentUpload] = []
+    ) async throws -> DraftSaveResult {
+        let response: DraftResponse = try await putJSONForResponse(
+            "/drafts/\(draftId)",
+            body: DraftEmailRequest(
+                accountId: accountId,
+                to: to,
+                subject: subject,
+                body: body,
+                htmlBody: htmlBody,
+                threadId: threadId,
+                attachments: attachments
+            )
+        )
+        return response.draft
+    }
+
+    func sendDraft(
+        draftId: String,
+        to: String,
+        subject: String,
+        body: String,
+        htmlBody: String? = nil,
+        accountId: String? = nil,
+        threadId: String? = nil,
+        attachments: [EmailAttachmentUpload] = []
+    ) async throws {
+        try await postJSON(
+            "/drafts/\(draftId)/send",
+            body: DraftEmailRequest(
+                accountId: accountId,
+                to: to,
+                subject: subject,
+                body: body,
+                htmlBody: htmlBody,
+                threadId: threadId,
+                attachments: attachments
+            )
+        )
+    }
+
+    func deleteDraft(draftId: String, accountId: String? = nil) async throws {
+        try await delete("/drafts/\(draftId)", queryItems: accountQueryItems(accountId: accountId))
     }
 
     func reply(to email: Email, body: String, accountId: String? = nil, attachments: [EmailAttachmentUpload] = []) async throws {
@@ -125,6 +221,7 @@ struct APIClient {
                 to: email.senderEmailAddress,
                 subject: email.subject,
                 body: body,
+                htmlBody: nil,
                 threadId: email.threadId,
                 attachments: attachments
             )
@@ -135,6 +232,7 @@ struct APIClient {
         to: String,
         subject: String,
         body: String,
+        htmlBody: String? = nil,
         threadId: String,
         accountId: String? = nil,
         attachments: [EmailAttachmentUpload] = []
@@ -146,6 +244,7 @@ struct APIClient {
                 to: to,
                 subject: subject,
                 body: body,
+                htmlBody: htmlBody,
                 threadId: threadId,
                 attachments: attachments
             )
@@ -219,6 +318,26 @@ struct APIClient {
         }
     }
 
+    private func putJSONForResponse<RequestBody: Encodable, ResponseBody: Decodable>(
+        _ path: String,
+        body: RequestBody
+    ) async throws -> ResponseBody {
+        let url = makeURL(path)
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(body)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200..<300).contains(httpResponse.statusCode) else {
+            throw APIError.badResponse
+        }
+
+        return try JSONDecoder().decode(ResponseBody.self, from: data)
+    }
+
     private func postJSON<T: Encodable>(_ path: String, body: T) async throws {
         let url = makeURL(path)
         var request = URLRequest(url: url)
@@ -262,7 +381,12 @@ struct APIClient {
         return components.url!
     }
 
-    private func accountQueryItems(accountId: String?, searchQuery: String? = nil, folder: MailboxFolder? = nil) -> [URLQueryItem] {
+    private func accountQueryItems(
+        accountId: String?,
+        searchQuery: String? = nil,
+        folder: MailboxFolder? = nil,
+        pageToken: String? = nil
+    ) -> [URLQueryItem] {
         var items: [URLQueryItem] = []
         if let accountId, !accountId.isEmpty {
             items.append(URLQueryItem(name: "accountId", value: accountId))
@@ -273,6 +397,9 @@ struct APIClient {
         if let folder {
             items.append(URLQueryItem(name: "folder", value: folder.rawValue))
         }
+        if let pageToken, !pageToken.isEmpty {
+            items.append(URLQueryItem(name: "pageToken", value: pageToken))
+        }
         return items
     }
 }
@@ -280,6 +407,7 @@ struct APIClient {
 enum MailboxFolder: String, CaseIterable, Identifiable {
     case inbox
     case sent
+    case drafts
     case archive
     case trash
 
@@ -289,6 +417,7 @@ enum MailboxFolder: String, CaseIterable, Identifiable {
         switch self {
         case .inbox: return "Inbox"
         case .sent: return "Sent"
+        case .drafts: return "Drafts"
         case .archive: return "Archive"
         case .trash: return "Trash"
         }
@@ -298,6 +427,7 @@ enum MailboxFolder: String, CaseIterable, Identifiable {
         switch self {
         case .inbox: return "tray.fill"
         case .sent: return "paperplane.fill"
+        case .drafts: return "doc.text.fill"
         case .archive: return "archivebox.fill"
         case .trash: return "trash.fill"
         }
@@ -310,6 +440,7 @@ private struct GoogleAuthURLResponse: Decodable {
 
 private struct EmailsResponse: Decodable {
     let emails: [Email]
+    let nextPageToken: String?
 }
 
 private struct EmailResponse: Decodable {
@@ -358,6 +489,11 @@ private struct AccountsResponse: Decodable {
     let accounts: [GmailAccount]
 }
 
+struct EmailPage {
+    let emails: [Email]
+    let nextPageToken: String?
+}
+
 struct GmailAccount: Identifiable, Hashable, Decodable {
     let id: String
     let email: String
@@ -382,11 +518,22 @@ struct EmailAttachmentUpload: Encodable {
     let data: String
 }
 
+struct DraftSaveResult: Decodable {
+    let id: String
+    let messageId: String
+    let threadId: String
+}
+
+private struct DraftResponse: Decodable {
+    let draft: DraftSaveResult
+}
+
 private struct SendEmailRequest: Encodable {
     let accountId: String?
     let to: String
     let subject: String
     let body: String
+    let htmlBody: String?
     let attachments: [EmailAttachmentUpload]
 }
 
@@ -395,7 +542,18 @@ private struct ReplyEmailRequest: Encodable {
     let to: String
     let subject: String
     let body: String
+    let htmlBody: String?
     let threadId: String
+    let attachments: [EmailAttachmentUpload]
+}
+
+private struct DraftEmailRequest: Encodable {
+    let accountId: String?
+    let to: String
+    let subject: String
+    let body: String
+    let htmlBody: String?
+    let threadId: String?
     let attachments: [EmailAttachmentUpload]
 }
 

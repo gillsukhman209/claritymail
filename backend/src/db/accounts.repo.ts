@@ -124,6 +124,11 @@ export async function getGoogleAccountByEmail(email: string) {
   return decryptAccount(doc.id, doc.data());
 }
 
+export async function deleteGoogleAccount(accountId: string) {
+  const db = getFirestore();
+  await db.collection("gmailAccounts").doc(accountId).delete();
+}
+
 export async function updateGmailWatchState(
   accountId: string,
   input: { historyId: string; expiration?: string | null }

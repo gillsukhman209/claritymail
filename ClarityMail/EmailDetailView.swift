@@ -13,12 +13,15 @@ import AppKit
 struct EmailDetailView: View {
     let email: Email
     let accountId: String?
+    let accounts: [GmailAccount]
     let onBlockedSender: ((String) -> Void)?
     @Environment(\.dismiss) private var dismiss
     @State private var loadedEmail: Email?
+    @State private var threadEmails: [Email] = []
     @State private var isLoading = false
     @State private var isPerformingAction = false
     @State private var isShowingReply = false
+    @State private var isShowingForward = false
     @State private var summary: String?
     @State private var isLoadingSummary = false
     @State private var errorMessage: String?
@@ -41,18 +44,13 @@ struct EmailDetailView: View {
 
                     summaryCard
 
-                    attachmentSection
-
                     if let errorMessage {
                         Text(errorMessage)
                             .font(.system(size: 13))
                             .foregroundStyle(Theme.Palette.warm)
                     }
 
-                    EmailHTMLView(
-                        html: visibleEmail.htmlBody,
-                        plainText: visibleEmail.body ?? visibleEmail.snippet
-                    )
+                    threadSection
 
                     if isLoading && loadedEmail == nil {
                         ProgressView()
@@ -68,24 +66,17 @@ struct EmailDetailView: View {
             .scrollIndicators(.hidden)
 
             if isShowingReply {
-                VStack {
-                    Spacer()
-                    HStack {
-                        Spacer()
-                        ComposerView(
-                            mode: .reply(visibleEmail),
-                            accountId: accountId,
-                            onSent: {},
-                            onClose: {
-                                isShowingReply = false
-                            }
-                        )
-                        .padding(.trailing, 24)
-                        .padding(.bottom, 24)
-                    }
-                }
-                .transition(.move(edge: .bottom).combined(with: .opacity))
-                .zIndex(20)
+                composerOverlay(mode: .reply(visibleEmail), isPresented: $isShowingReply)
+            }
+
+            if isShowingForward {
+                composerOverlay(mode: .forward(visibleEmail), isPresented: $isShowingForward)
+            }
+
+            VStack {
+                Spacer()
+                UndoSendToast()
+                    .padding(.bottom, 24)
             }
         }
         .animation(.snappy(duration: 0.2), value: isShowingReply)
@@ -107,6 +98,16 @@ struct EmailDetailView: View {
                 }
                 .disabled(isPerformingAction)
                 .keyboardShortcut("r", modifiers: [.command])
+            }
+
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    isShowingForward = true
+                } label: {
+                    Label("Forward", systemImage: "arrowshape.turn.up.right")
+                }
+                .disabled(isPerformingAction)
+                .keyboardShortcut("f", modifiers: [.command, .shift])
             }
 
             ToolbarItem(placement: .primaryAction) {
@@ -214,26 +215,46 @@ struct EmailDetailView: View {
     }
 
     @ViewBuilder
-    private var attachmentSection: some View {
-        let attachments = visibleEmail.attachments ?? []
-        if !attachments.isEmpty {
-            VStack(alignment: .leading, spacing: 10) {
-                Text("\(attachments.count) attachment\(attachments.count == 1 ? "" : "s")")
+    private var threadSection: some View {
+        let messages = threadEmails.isEmpty ? [visibleEmail] : threadEmails
+        VStack(alignment: .leading, spacing: 14) {
+            if messages.count > 1 {
+                Text("\(messages.count) messages in this conversation")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(Theme.Palette.textTertiary)
+            }
 
-                ForEach(attachments) { attachment in
-                    AttachmentPreview(
-                        attachment: attachment,
-                        data: attachmentData[attachment.id],
-                        isLoading: loadingAttachmentIds.contains(attachment.id),
-                        onOpen: {
-                            openAttachment(attachment)
-                        }
-                    )
-                }
+            ForEach(messages) { message in
+                ThreadMessageView(
+                    email: message,
+                    attachmentData: attachmentData,
+                    loadingAttachmentIds: loadingAttachmentIds,
+                    onOpenAttachment: openAttachment
+                )
             }
         }
+    }
+
+    private func composerOverlay(mode: ComposerView.Mode, isPresented: Binding<Bool>) -> some View {
+        VStack {
+            Spacer()
+            HStack {
+                Spacer()
+                ComposerView(
+                    mode: mode,
+                    accountId: accountId ?? visibleEmail.accountId,
+                    accounts: accounts,
+                    onSent: {},
+                    onClose: {
+                        isPresented.wrappedValue = false
+                    }
+                )
+                .padding(.trailing, 24)
+                .padding(.bottom, 24)
+            }
+        }
+        .transition(.move(edge: .bottom).combined(with: .opacity))
+        .zIndex(20)
     }
 
     private func attachmentIcon(for mimeType: String) -> String {
@@ -252,9 +273,21 @@ struct EmailDetailView: View {
             let fetchedEmail = try await apiClient.email(id: email.id, accountId: accountId)
             loadedEmail = fetchedEmail
             errorMessage = nil
-            await loadAttachments(for: fetchedEmail)
+            await loadThread(for: fetchedEmail)
         } catch {
             errorMessage = "Could not load email body."
+        }
+    }
+
+    private func loadThread(for email: Email) async {
+        do {
+            threadEmails = try await apiClient.thread(id: email.threadId, accountId: accountId)
+            for message in threadEmails {
+                await loadAttachments(for: message)
+            }
+        } catch {
+            threadEmails = [email]
+            await loadAttachments(for: email)
         }
     }
 
@@ -502,6 +535,67 @@ private struct AttachmentPreview: View {
         #else
         return nil
         #endif
+    }
+}
+
+private struct ThreadMessageView: View {
+    let email: Email
+    let attachmentData: [String: Data]
+    let loadingAttachmentIds: Set<String>
+    let onOpenAttachment: (EmailAttachment) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 10) {
+                SenderLogoView(email: email, size: 30)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(email.sender)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Theme.Palette.textPrimary)
+                        .lineLimit(1)
+                    Text(email.receivedAt, style: .date)
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.Palette.textTertiary)
+                }
+
+                Spacer()
+            }
+
+            let attachments = email.attachments ?? []
+            if !attachments.isEmpty {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("\(attachments.count) attachment\(attachments.count == 1 ? "" : "s")")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Theme.Palette.textTertiary)
+
+                    ForEach(attachments) { attachment in
+                        AttachmentPreview(
+                            attachment: attachment,
+                            data: attachmentData[attachment.id],
+                            isLoading: loadingAttachmentIds.contains(attachment.id),
+                            onOpen: {
+                                onOpenAttachment(attachment)
+                            }
+                        )
+                    }
+                }
+            }
+
+            EmailHTMLView(
+                html: email.htmlBody,
+                plainText: email.body ?? email.snippet
+            )
+        }
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.Radius.row, style: .continuous)
+                .fill(Theme.Palette.surface.opacity(0.5))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.Radius.row, style: .continuous)
+                .strokeBorder(Theme.Palette.border, lineWidth: 1)
+        )
     }
 }
 

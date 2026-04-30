@@ -11,8 +11,11 @@ import {
 import {
   archiveEmail,
   blockSenderInGmail,
+  createDraft,
+  deleteDraft,
   getEmail,
   getEmailAttachment,
+  getThread,
   listMailboxEmails,
   markEmailRead,
   markEmailUnread,
@@ -20,8 +23,10 @@ import {
   type EmailAttachment,
   replyToEmail,
   sendEmail,
+  sendDraft,
   starEmail,
   trashEmail,
+  updateDraft,
   unblockSenderInGmail,
   unstarEmail
 } from "../services/gmail.service.js";
@@ -30,13 +35,45 @@ import { summarizeEmail } from "../services/ai.service.js";
 export const emailRoutes = Router();
 
 function mailboxFolderFromQuery(value: unknown): MailboxFolder {
-  return value === "sent" || value === "archive" || value === "trash" ? value : "inbox";
+  return value === "sent" || value === "archive" || value === "trash" || value === "drafts" ? value : "inbox";
 }
 
 const maxAttachmentBytes = 25 * 1024 * 1024;
 
 function attachmentByteCount(attachments: EmailAttachment[] = []) {
   return attachments.reduce((total, attachment) => total + Buffer.from(attachment.data, "base64").length, 0);
+}
+
+function encodePageState(state: Record<string, string | null | undefined>) {
+  const cleaned = Object.fromEntries(Object.entries(state).filter((entry): entry is [string, string] => Boolean(entry[1])));
+  if (Object.keys(cleaned).length === 0) return null;
+  return Buffer.from(JSON.stringify(cleaned), "utf8").toString("base64url");
+}
+
+function decodePageState(value: unknown): Record<string, string> {
+  if (typeof value !== "string" || !value) return {};
+  try {
+    return JSON.parse(Buffer.from(value, "base64url").toString("utf8"));
+  } catch {
+    return {};
+  }
+}
+
+function validateSendBody(
+  response: import("express").Response,
+  body: { to?: string; body?: string; htmlBody?: string; attachments?: EmailAttachment[] }
+) {
+  if (!body.to || (!body.body && !body.htmlBody)) {
+    response.status(400).json({ error: "Missing to or body." });
+    return false;
+  }
+
+  if (attachmentByteCount(body.attachments) > maxAttachmentBytes) {
+    response.status(400).json({ error: "Gmail attachments cannot exceed 25 MB total." });
+    return false;
+  }
+
+  return true;
 }
 
 async function requireSelectedAccount(request: import("express").Request, response: import("express").Response) {
@@ -63,6 +100,7 @@ emailRoutes.get("/emails", async (request, response, next) => {
     const query = typeof request.query.q === "string" ? request.query.q : undefined;
     const accountId = typeof request.query.accountId === "string" ? request.query.accountId : undefined;
     const folder = mailboxFolderFromQuery(request.query.folder);
+    const pageState = decodePageState(request.query.pageToken);
 
     if (accountId) {
       const account = await getGoogleAccountById(accountId);
@@ -71,11 +109,11 @@ emailRoutes.get("/emails", async (request, response, next) => {
         return;
       }
 
-      const emails = filterBlockedEmails(
-        await listMailboxEmails(account, { query, folder }),
-        await listBlockedSenderEmails(account.id ?? accountId)
-      );
-      response.json({ emails });
+      const result = await listMailboxEmails(account, { query, folder, pageToken: pageState[accountId] });
+      response.json({
+        emails: filterBlockedEmails(result.emails, await listBlockedSenderEmails(account.id ?? accountId)),
+        nextPageToken: encodePageState({ [accountId]: result.nextPageToken })
+      });
       return;
     }
 
@@ -84,22 +122,29 @@ emailRoutes.get("/emails", async (request, response, next) => {
       accounts.map(async (accountSummary) => {
         const account = await getGoogleAccountById(accountSummary.id);
         if (!account) {
-          return [];
+          return { emails: [], accountId: accountSummary.id, nextPageToken: null };
         }
 
-        return filterBlockedEmails(
-          await listMailboxEmails(account, { query, folder }),
-          await listBlockedSenderEmails(account.id ?? accountSummary.id)
-        );
+        const result = await listMailboxEmails(account, { query, folder, pageToken: pageState[accountSummary.id] });
+        return {
+          emails: filterBlockedEmails(result.emails, await listBlockedSenderEmails(account.id ?? accountSummary.id)),
+          accountId: accountSummary.id,
+          nextPageToken: result.nextPageToken
+        };
       })
     );
 
     const emails = emailGroups
-      .flat()
+      .flatMap((group) => group.emails)
       .sort((left, right) => Date.parse(right.receivedAt) - Date.parse(left.receivedAt))
       .slice(0, 50);
 
-    response.json({ emails });
+    response.json({
+      emails,
+      nextPageToken: encodePageState(
+        Object.fromEntries(emailGroups.map((group) => [group.accountId, group.nextPageToken]))
+      )
+    });
   } catch (error) {
     next(error);
   }
@@ -135,6 +180,17 @@ emailRoutes.get("/emails/:id", async (request, response, next) => {
   }
 });
 
+emailRoutes.get("/threads/:threadId", async (request, response, next) => {
+  try {
+    const account = await requireSelectedAccount(request, response);
+    if (!account) return;
+
+    response.json({ emails: await getThread(account, request.params.threadId) });
+  } catch (error) {
+    next(error);
+  }
+});
+
 emailRoutes.get("/emails/:id/attachments/:attachmentId", async (request, response, next) => {
   try {
     const account = await requireSelectedAccount(request, response);
@@ -164,24 +220,17 @@ emailRoutes.post("/send", async (request, response, next) => {
     const account = await requireSelectedAccount(request, response);
     if (!account) return;
 
-    const { to, subject, body, attachments } = request.body as {
+    const { to, subject, body, htmlBody, attachments } = request.body as {
       to?: string;
       subject?: string;
       body?: string;
+      htmlBody?: string;
       attachments?: EmailAttachment[];
     };
 
-    if (!to || !body) {
-      response.status(400).json({ error: "Missing to or body." });
-      return;
-    }
+    if (!validateSendBody(response, { to, body, htmlBody, attachments })) return;
 
-    if (attachmentByteCount(attachments) > maxAttachmentBytes) {
-      response.status(400).json({ error: "Gmail attachments cannot exceed 25 MB total." });
-      return;
-    }
-
-    const result = await sendEmail(account, { to, subject, body, attachments });
+    const result = await sendEmail(account, { to: to!, subject, body: body ?? "", htmlBody, attachments });
     response.json({ ok: true, message: result });
   } catch (error) {
     next(error);
@@ -193,26 +242,131 @@ emailRoutes.post("/reply", async (request, response, next) => {
     const account = await requireSelectedAccount(request, response);
     if (!account) return;
 
-    const { to, subject, body, threadId, attachments } = request.body as {
+    const { to, subject, body, htmlBody, threadId, attachments } = request.body as {
       to?: string;
       subject?: string;
       body?: string;
+      htmlBody?: string;
       threadId?: string;
       attachments?: EmailAttachment[];
     };
 
-    if (!to || !body || !threadId) {
+    if (!to || (!body && !htmlBody) || !threadId) {
       response.status(400).json({ error: "Missing to, body, or threadId." });
       return;
     }
+    if (!validateSendBody(response, { to, body, htmlBody, attachments })) return;
+
+    const result = await replyToEmail(account, { to, subject, body: body ?? "", htmlBody, threadId, attachments });
+    response.json({ ok: true, message: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+emailRoutes.post("/drafts", async (request, response, next) => {
+  try {
+    const account = await requireSelectedAccount(request, response);
+    if (!account) return;
+
+    const { to, subject, body, htmlBody, attachments, threadId } = request.body as {
+      to?: string;
+      subject?: string;
+      body?: string;
+      htmlBody?: string;
+      attachments?: EmailAttachment[];
+      threadId?: string;
+    };
 
     if (attachmentByteCount(attachments) > maxAttachmentBytes) {
       response.status(400).json({ error: "Gmail attachments cannot exceed 25 MB total." });
       return;
     }
 
-    const result = await replyToEmail(account, { to, subject, body, threadId, attachments });
+    const draft = await createDraft(account, {
+      to: to ?? "",
+      subject: subject ?? "",
+      body: body ?? "",
+      htmlBody,
+      attachments,
+      threadId
+    });
+    response.json({ draft });
+  } catch (error) {
+    next(error);
+  }
+});
+
+emailRoutes.put("/drafts/:draftId", async (request, response, next) => {
+  try {
+    const account = await requireSelectedAccount(request, response);
+    if (!account) return;
+
+    const { to, subject, body, htmlBody, attachments, threadId } = request.body as {
+      to?: string;
+      subject?: string;
+      body?: string;
+      htmlBody?: string;
+      attachments?: EmailAttachment[];
+      threadId?: string;
+    };
+
+    if (attachmentByteCount(attachments) > maxAttachmentBytes) {
+      response.status(400).json({ error: "Gmail attachments cannot exceed 25 MB total." });
+      return;
+    }
+
+    const draft = await updateDraft(account, request.params.draftId, {
+      to: to ?? "",
+      subject: subject ?? "",
+      body: body ?? "",
+      htmlBody,
+      attachments,
+      threadId
+    });
+    response.json({ draft });
+  } catch (error) {
+    next(error);
+  }
+});
+
+emailRoutes.post("/drafts/:draftId/send", async (request, response, next) => {
+  try {
+    const account = await requireSelectedAccount(request, response);
+    if (!account) return;
+
+    const { to, subject, body, htmlBody, attachments, threadId } = request.body as {
+      to?: string;
+      subject?: string;
+      body?: string;
+      htmlBody?: string;
+      attachments?: EmailAttachment[];
+      threadId?: string;
+    };
+
+    if (!validateSendBody(response, { to, body, htmlBody, attachments })) return;
+
+    const result = await sendDraft(account, request.params.draftId, {
+      to: to ?? "",
+      subject: subject ?? "",
+      body: body ?? "",
+      htmlBody,
+      attachments,
+      threadId
+    });
     response.json({ ok: true, message: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+emailRoutes.delete("/drafts/:draftId", async (request, response, next) => {
+  try {
+    const account = await requireSelectedAccount(request, response);
+    if (!account) return;
+
+    await deleteDraft(account, request.params.draftId);
+    response.json({ ok: true });
   } catch (error) {
     next(error);
   }

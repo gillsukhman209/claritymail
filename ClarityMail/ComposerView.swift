@@ -12,6 +12,8 @@ struct ComposerView: View {
     enum Mode {
         case compose
         case reply(Email)
+        case forward(Email)
+        case draft(Email)
     }
 
     private enum FocusField {
@@ -26,13 +28,19 @@ struct ComposerView: View {
     let onClose: () -> Void
 
     @State private var selectedAccountId: String?
+    @State private var currentDraftId: String?
+    @State private var draftThreadId: String?
     @State private var to = ""
     @State private var subject = ""
     @State private var messageBody = ""
+    @State private var forwardedHTMLBody: String?
     @State private var attachments: [ComposerAttachment] = []
     @State private var isShowingFileImporter = false
     @State private var isSending = false
+    @State private var autosaveTask: Task<Void, Never>?
+    @State private var lastSavedDraftFingerprint = ""
     @State private var errorMessage: String?
+    @AppStorage("undoSendDelaySeconds") private var undoSendDelaySeconds = 10
     @FocusState private var focusedField: FocusField?
 
     private let apiClient = APIClient()
@@ -58,13 +66,17 @@ struct ComposerView: View {
             return "New Message"
         case .reply:
             return "Reply"
+        case .forward:
+            return "Forward"
+        case .draft:
+            return "Draft"
         }
     }
 
     private var canSend: Bool {
         !isSending &&
         !to.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-        !messageBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+        (!messageBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || forwardedHTMLBody != nil) &&
         attachmentBytes <= maxAttachmentBytes
     }
 
@@ -91,6 +103,7 @@ struct ComposerView: View {
                 Spacer()
 
                 Button {
+                    autosaveTask?.cancel()
                     onClose()
                 } label: {
                     Image(systemName: "xmark")
@@ -228,6 +241,13 @@ struct ComposerView: View {
             configureInitialValues()
             focusInitialField()
         }
+        .onChange(of: to) { scheduleAutosave() }
+        .onChange(of: subject) { scheduleAutosave() }
+        .onChange(of: messageBody) { scheduleAutosave() }
+        .onChange(of: selectedAccountId) { scheduleAutosave() }
+        .onDisappear {
+            autosaveTask?.cancel()
+        }
     }
 
     private var attachmentList: some View {
@@ -319,6 +339,20 @@ struct ComposerView: View {
         case .reply(let email):
             to = email.senderEmailAddress
             subject = email.subject.lowercased().hasPrefix("re:") ? email.subject : "Re: \(email.subject)"
+            draftThreadId = email.threadId
+        case .forward(let email):
+            selectedAccountId = selectedAccountId ?? email.accountId
+            subject = email.subject.lowercased().hasPrefix("fwd:") ? email.subject : "Fwd: \(email.subject)"
+            forwardedHTMLBody = forwardedHTML(from: email)
+            messageBody = ""
+        case .draft(let email):
+            currentDraftId = email.draftId
+            selectedAccountId = selectedAccountId ?? email.accountId
+            draftThreadId = email.threadId
+            to = email.to ?? ""
+            subject = email.subject == "(No subject)" ? "" : email.subject
+            messageBody = email.body ?? email.snippet
+            lastSavedDraftFingerprint = draftFingerprint()
         }
     }
 
@@ -329,14 +363,148 @@ struct ComposerView: View {
                 focusedField = .to
             case .reply:
                 focusedField = .body
+            case .forward:
+                focusedField = .to
+            case .draft:
+                focusedField = to.isEmpty ? .to : .body
             }
         }
     }
 
     private func send() async {
         guard canSend else { return }
+        autosaveTask?.cancel()
         isSending = true
-        defer { isSending = false }
+
+        let uploads = attachmentUploads()
+        let htmlBody = composedHTMLBody()
+        let selectedAccountId = selectedAccountId
+        let currentDraftId = currentDraftId
+        let draftThreadId = draftThreadId
+        let to = to
+        let subject = subject
+        let body = messageBody
+        let mode = mode
+        let apiClient = apiClient
+        let onSent = onSent
+
+        UndoSendManager.shared.schedule(
+            title: "Sending",
+            delay: undoSendDelaySeconds,
+            operation: {
+                switch mode {
+                case .compose, .forward:
+                    try await apiClient.sendEmail(
+                        to: to,
+                        subject: subject,
+                        body: body,
+                        htmlBody: htmlBody,
+                        accountId: selectedAccountId,
+                        attachments: uploads
+                    )
+                    if let currentDraftId {
+                        try? await apiClient.deleteDraft(draftId: currentDraftId, accountId: selectedAccountId)
+                    }
+                case .reply(let email):
+                    if let currentDraftId {
+                        try await apiClient.sendDraft(
+                            draftId: currentDraftId,
+                            to: to,
+                            subject: subject,
+                            body: body,
+                            htmlBody: htmlBody,
+                            accountId: selectedAccountId,
+                            threadId: email.threadId,
+                            attachments: uploads
+                        )
+                    } else {
+                        try await apiClient.reply(
+                            to: to,
+                            subject: subject,
+                            body: body,
+                            htmlBody: htmlBody,
+                            threadId: email.threadId,
+                            accountId: selectedAccountId,
+                            attachments: uploads
+                        )
+                    }
+                case .draft(let email):
+                    if let currentDraftId {
+                        try await apiClient.sendDraft(
+                            draftId: currentDraftId,
+                            to: to,
+                            subject: subject,
+                            body: body,
+                            htmlBody: htmlBody,
+                            accountId: selectedAccountId,
+                            threadId: draftThreadId ?? email.threadId,
+                            attachments: uploads
+                        )
+                    } else {
+                        try await apiClient.sendEmail(
+                            to: to,
+                            subject: subject,
+                            body: body,
+                            htmlBody: htmlBody,
+                            accountId: selectedAccountId,
+                            attachments: uploads
+                        )
+                    }
+                }
+            },
+            onComplete: {
+                onSent()
+            },
+            onError: {}
+        )
+
+        isSending = false
+        onClose()
+    }
+
+    private func attachmentUploads() -> [EmailAttachmentUpload] {
+        attachments.map {
+            EmailAttachmentUpload(
+                filename: $0.name,
+                mimeType: $0.mimeType,
+                data: $0.data.base64EncodedString()
+            )
+        }
+    }
+
+    private func composedHTMLBody() -> String? {
+        guard let forwardedHTMLBody else { return nil }
+        let note = messageBody.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !note.isEmpty else { return forwardedHTMLBody }
+
+        let noteHTML = escapeHTML(note).replacingOccurrences(of: "\n", with: "<br>")
+        return "<div>\(noteHTML)</div><br>\(forwardedHTMLBody)"
+    }
+
+    private func scheduleAutosave() {
+        guard shouldAutosaveDraft else { return }
+
+        autosaveTask?.cancel()
+        autosaveTask = Task {
+            try? await Task.sleep(for: .seconds(2))
+            if Task.isCancelled { return }
+            await saveDraftIfNeeded()
+        }
+    }
+
+    private var shouldAutosaveDraft: Bool {
+        !to.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+        !subject.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+        !messageBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func draftFingerprint() -> String {
+        "\(selectedAccountId ?? "")|\(to)|\(subject)|\(messageBody)|\(attachments.map(\.name).joined(separator: ","))"
+    }
+
+    private func saveDraftIfNeeded() async {
+        let fingerprint = draftFingerprint()
+        guard fingerprint != lastSavedDraftFingerprint else { return }
 
         do {
             let uploads = attachments.map {
@@ -347,32 +515,58 @@ struct ComposerView: View {
                 )
             }
 
-            switch mode {
-            case .compose:
-                try await apiClient.sendEmail(
+            let result: DraftSaveResult
+            if let currentDraftId {
+                result = try await apiClient.updateDraft(
+                    draftId: currentDraftId,
                     to: to,
                     subject: subject,
                     body: messageBody,
+                    htmlBody: composedHTMLBody(),
                     accountId: selectedAccountId,
+                    threadId: draftThreadId,
                     attachments: uploads
                 )
-            case .reply(let email):
-                try await apiClient.reply(
+            } else {
+                result = try await apiClient.createDraft(
                     to: to,
                     subject: subject,
                     body: messageBody,
-                    threadId: email.threadId,
+                    htmlBody: composedHTMLBody(),
                     accountId: selectedAccountId,
+                    threadId: draftThreadId,
                     attachments: uploads
                 )
             }
 
-            errorMessage = nil
-            onSent()
-            onClose()
+            currentDraftId = result.id
+            draftThreadId = result.threadId.isEmpty ? draftThreadId : result.threadId
+            lastSavedDraftFingerprint = fingerprint
         } catch {
-            errorMessage = "Could not send email."
+            errorMessage = "Could not save draft."
         }
+    }
+
+    private func forwardedHTML(from email: Email) -> String {
+        let originalHTML = email.htmlBody ?? "<div>\(escapeHTML(email.body ?? email.snippet).replacingOccurrences(of: "\n", with: "<br>"))</div>"
+        return """
+        <div><br></div>
+        <div>---------- Forwarded message ----------</div>
+        <div><b>From:</b> \(escapeHTML(email.sender))</div>
+        <div><b>Date:</b> \(escapeHTML(email.receivedAt.formatted(date: .abbreviated, time: .shortened)))</div>
+        <div><b>Subject:</b> \(escapeHTML(email.subject))</div>
+        <br>
+        \(originalHTML)
+        """
+    }
+
+    private func escapeHTML(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+            .replacingOccurrences(of: "'", with: "&#39;")
     }
 
     private func handleFileImport(_ result: Result<[URL], Error>) {

@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { createGoogleAuthUrl, exchangeGoogleCode } from "../services/googleOAuth.service.js";
-import { getLatestGoogleAccount, listGoogleAccounts, saveGoogleAccount } from "../db/accounts.repo.js";
+import { deleteGoogleAccount, getLatestGoogleAccount, listGoogleAccounts, saveGoogleAccount } from "../db/accounts.repo.js";
 
 export const authRoutes = Router();
 
@@ -24,6 +24,15 @@ authRoutes.get("/accounts", async (_request, response, next) => {
   try {
     const accounts = await listGoogleAccounts();
     response.json({ accounts });
+  } catch (error) {
+    next(error);
+  }
+});
+
+authRoutes.delete("/accounts/:id", async (request, response, next) => {
+  try {
+    await deleteGoogleAccount(request.params.id);
+    response.json({ ok: true });
   } catch (error) {
     next(error);
   }
