@@ -10,6 +10,8 @@ import SwiftUI
 struct EmailDetailView: View {
     let email: Email
     let accountId: String?
+    let onBlockedSender: ((String) -> Void)?
+    @Environment(\.dismiss) private var dismiss
     @State private var loadedEmail: Email?
     @State private var isLoading = false
     @State private var isPerformingAction = false
@@ -95,6 +97,12 @@ struct EmailDetailView: View {
                         Task { await trash() }
                     } label: {
                         Label("Trash", systemImage: "trash")
+                    }
+
+                    Button(role: .destructive) {
+                        Task { await blockSender() }
+                    } label: {
+                        Label("Block Sender", systemImage: "hand.raised")
                     }
                 } label: {
                     Image(systemName: "ellipsis.circle")
@@ -238,6 +246,19 @@ struct EmailDetailView: View {
     private func trash() async {
         await performAction {
             try await apiClient.trashEmail(id: visibleEmail.id, accountId: accountId)
+        }
+    }
+
+    private func blockSender() async {
+        var blockedSenderEmail: String?
+
+        await performAction {
+            blockedSenderEmail = try await apiClient.blockSender(id: visibleEmail.id, accountId: accountId)
+        }
+
+        if errorMessage == nil, let blockedSenderEmail {
+            onBlockedSender?(blockedSenderEmail)
+            dismiss()
         }
     }
 

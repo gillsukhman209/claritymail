@@ -1,7 +1,14 @@
 import { Router } from "express";
 import { getGoogleAccountById, getLatestGoogleAccount, listGoogleAccounts } from "../db/accounts.repo.js";
 import {
+  filterBlockedEmails,
+  listBlockedSenderEmails,
+  normalizeEmailAddress,
+  saveBlockedSender
+} from "../db/blockedSenders.repo.js";
+import {
   archiveEmail,
+  blockSenderInGmail,
   getEmail,
   listMailboxEmails,
   markEmailRead,
@@ -53,7 +60,10 @@ emailRoutes.get("/emails", async (request, response, next) => {
         return;
       }
 
-      const emails = await listMailboxEmails(account, { query, folder });
+      const emails = filterBlockedEmails(
+        await listMailboxEmails(account, { query, folder }),
+        await listBlockedSenderEmails(account.id ?? accountId)
+      );
       response.json({ emails });
       return;
     }
@@ -62,7 +72,14 @@ emailRoutes.get("/emails", async (request, response, next) => {
     const emailGroups = await Promise.all(
       accounts.map(async (accountSummary) => {
         const account = await getGoogleAccountById(accountSummary.id);
-        return account ? listMailboxEmails(account, { query, folder }) : [];
+        if (!account) {
+          return [];
+        }
+
+        return filterBlockedEmails(
+          await listMailboxEmails(account, { query, folder }),
+          await listBlockedSenderEmails(account.id ?? accountSummary.id)
+        );
       })
     );
 
@@ -169,6 +186,33 @@ emailRoutes.post("/emails/:id/trash", async (request, response, next) => {
 
     await trashEmail(account, request.params.id);
     response.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+emailRoutes.post("/emails/:id/block-sender", async (request, response, next) => {
+  try {
+    const account = await requireSelectedAccount(request, response);
+    if (!account) return;
+
+    if (!account.id || !account.email) {
+      response.status(400).json({ error: "Connected Gmail account is missing account metadata." });
+      return;
+    }
+
+    const email = await getEmail(account, request.params.id);
+    const senderEmail = normalizeEmailAddress(email.sender);
+
+    await saveBlockedSender({
+      accountId: account.id,
+      accountEmail: account.email,
+      senderEmail
+    });
+
+    await blockSenderInGmail(account, senderEmail);
+
+    response.json({ ok: true, senderEmail });
   } catch (error) {
     next(error);
   }

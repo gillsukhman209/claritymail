@@ -79,7 +79,11 @@ struct MailboxView: View {
             }
             .modifier(HideNavigationBarModifier())
             .navigationDestination(item: $selectedEmail) { email in
-                EmailDetailView(email: email, accountId: selectedAccountId ?? email.accountId)
+                EmailDetailView(email: email, accountId: selectedAccountId ?? email.accountId) { blockedSender in
+                    emails.removeAll {
+                        $0.senderEmailAddress.caseInsensitiveCompare(blockedSender) == .orderedSame
+                    }
+                }
             }
             .task {
                 await loadAccounts()

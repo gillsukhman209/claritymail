@@ -215,6 +215,50 @@ export async function trashEmail(account: GmailAccount, id: string) {
   });
 }
 
+export async function blockSenderInGmail(account: GmailAccount, senderEmail: string) {
+  const gmail = getGmailClient(account);
+
+  const filtersResponse = await gmail.users.settings.filters.list({
+    userId: "me"
+  });
+
+  const existingFilter = (filtersResponse.data.filter ?? []).find(
+    (filter) => filter.criteria?.from?.toLowerCase() === senderEmail.toLowerCase()
+  );
+
+  if (!existingFilter) {
+    await gmail.users.settings.filters.create({
+      userId: "me",
+      requestBody: {
+        criteria: {
+          from: senderEmail
+        },
+        action: {
+          removeLabelIds: ["INBOX"],
+          addLabelIds: ["TRASH"]
+        }
+      }
+    });
+  }
+
+  const matchingMessages = await gmail.users.messages.list({
+    userId: "me",
+    q: `from:${senderEmail}`,
+    maxResults: 100
+  });
+
+  await Promise.all(
+    (matchingMessages.data.messages ?? []).map((message) =>
+      message.id
+        ? gmail.users.messages.trash({
+            userId: "me",
+            id: message.id
+          })
+        : Promise.resolve()
+    )
+  );
+}
+
 export async function markEmailRead(account: GmailAccount, id: string) {
   const gmail = getGmailClient(account);
   await gmail.users.messages.modify({

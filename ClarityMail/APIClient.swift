@@ -48,6 +48,14 @@ struct APIClient {
         try await post("/emails/\(id)/trash", queryItems: accountQueryItems(accountId: accountId))
     }
 
+    func blockSender(id: Email.ID, accountId: String? = nil) async throws -> String {
+        let response: BlockSenderResponse = try await postForResponse(
+            "/emails/\(id)/block-sender",
+            queryItems: accountQueryItems(accountId: accountId)
+        )
+        return response.senderEmail
+    }
+
     func markEmailRead(id: Email.ID, accountId: String? = nil) async throws {
         try await post("/emails/\(id)/read", queryItems: accountQueryItems(accountId: accountId))
     }
@@ -131,6 +139,21 @@ struct APIClient {
               (200..<300).contains(httpResponse.statusCode) else {
             throw APIError.badResponse
         }
+    }
+
+    private func postForResponse<T: Decodable>(_ path: String, queryItems: [URLQueryItem] = []) async throws -> T {
+        let url = makeURL(path, queryItems: queryItems)
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200..<300).contains(httpResponse.statusCode) else {
+            throw APIError.badResponse
+        }
+
+        return try JSONDecoder().decode(T.self, from: data)
     }
 
     private func postJSON<T: Encodable>(_ path: String, body: T) async throws {
@@ -232,6 +255,10 @@ private struct EmailResponse: Decodable {
 
 private struct EmailSummaryResponse: Decodable {
     let summary: String
+}
+
+private struct BlockSenderResponse: Decodable {
+    let senderEmail: String
 }
 
 private struct AccountsResponse: Decodable {
