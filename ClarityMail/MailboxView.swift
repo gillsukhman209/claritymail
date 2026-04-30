@@ -22,6 +22,8 @@ struct MailboxView: View {
     @State private var isShowingComposer = false
     @State private var autoRefreshTask: Task<Void, Never>?
     @State private var searchTask: Task<Void, Never>?
+    @State private var knownEmailIds = Set<String>()
+    @State private var hasLoadedInitialEmails = false
 
     private let apiClient = APIClient()
 
@@ -86,6 +88,7 @@ struct MailboxView: View {
                 }
             }
             .task {
+                await NotificationManager.shared.requestAuthorization()
                 await loadAccounts()
                 await loadEmails()
                 await startRealtimeSync()
@@ -93,6 +96,8 @@ struct MailboxView: View {
             }
             .onChange(of: selectedAccountId) {
                 selectedEmail = nil
+                knownEmailIds.removeAll()
+                hasLoadedInitialEmails = false
                 Task {
                     await loadEmails()
                     await startRealtimeSync()
@@ -100,6 +105,8 @@ struct MailboxView: View {
             }
             .onChange(of: selectedFolder) {
                 selectedEmail = nil
+                knownEmailIds.removeAll()
+                hasLoadedInitialEmails = false
                 Task {
                     await loadEmails()
                 }
@@ -128,7 +135,7 @@ struct MailboxView: View {
                 }
             }
             .refreshable {
-                await loadEmails()
+                await loadEmails(notifyForNewEmails: false)
             }
         }
         .tint(Theme.Palette.accent)
@@ -148,16 +155,38 @@ struct MailboxView: View {
         }
     }
 
-    private func loadEmails() async {
+    private func loadEmails(notifyForNewEmails: Bool = true) async {
         isLoading = true
         defer { isLoading = false }
 
         do {
-            emails = try await apiClient.emails(accountId: selectedAccountId, searchQuery: searchText, folder: selectedFolder)
+            let fetchedEmails = try await apiClient.emails(accountId: selectedAccountId, searchQuery: searchText, folder: selectedFolder)
+            let fetchedIds = Set(fetchedEmails.map(\.id))
+
+            if shouldNotifyForNewEmails(notifyForNewEmails: notifyForNewEmails) {
+                let newEmails = fetchedEmails
+                    .filter { !knownEmailIds.contains($0.id) }
+                    .prefix(3)
+
+                for email in newEmails {
+                    await NotificationManager.shared.notifyNewEmail(email)
+                }
+            }
+
+            emails = fetchedEmails
+            knownEmailIds = fetchedIds
+            hasLoadedInitialEmails = true
             errorMessage = nil
         } catch {
             errorMessage = "Could not load inbox."
         }
+    }
+
+    private func shouldNotifyForNewEmails(notifyForNewEmails: Bool) -> Bool {
+        notifyForNewEmails &&
+        hasLoadedInitialEmails &&
+        selectedFolder == .inbox &&
+        searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private func startRealtimeSync() async {

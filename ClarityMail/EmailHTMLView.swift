@@ -14,7 +14,7 @@ struct EmailHTMLView: View {
     var body: some View {
         if let html, !html.isEmpty {
             EmailWebView(html: wrappedHTML(html), contentHeight: $contentHeight)
-                .frame(minHeight: max(contentHeight, 700))
+                .frame(height: max(contentHeight, 700))
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.row, style: .continuous))
         } else {
             Text(plainText)
@@ -72,7 +72,7 @@ private struct EmailWebView: NSViewRepresentable {
 
     func makeNSView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
-        let view = WKWebView(frame: .zero, configuration: configuration)
+        let view = PassthroughScrollWebView(frame: .zero, configuration: configuration)
         view.navigationDelegate = context.coordinator
         view.setValue(false, forKey: "drawsBackground")
         view.loadHTMLString(html, baseURL: nil)
@@ -104,6 +104,12 @@ private struct EmailWebView: NSViewRepresentable {
             }
         }
     }
+
+    final class PassthroughScrollWebView: WKWebView {
+        override func scrollWheel(with event: NSEvent) {
+            nextResponder?.scrollWheel(with: event)
+        }
+    }
 }
 #else
 private struct EmailWebView: UIViewRepresentable {
@@ -121,6 +127,7 @@ private struct EmailWebView: UIViewRepresentable {
         view.backgroundColor = .clear
         view.isOpaque = false
         view.scrollView.backgroundColor = .clear
+        view.scrollView.isScrollEnabled = false
         view.loadHTMLString(html, baseURL: nil)
         return view
     }

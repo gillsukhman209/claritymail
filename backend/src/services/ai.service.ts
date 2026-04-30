@@ -29,7 +29,14 @@ export async function summarizeEmail(input: {
       {
         role: "system",
         content:
-          "You summarize emails for a personal email client. Be concise, factual, and useful. Output 2-4 short bullets. Mention action items clearly if any."
+          [
+            "You summarize emails for a personal email client.",
+            "Return plain text only. No markdown, no bullets, no asterisks.",
+            "Use exactly this format:",
+            "Summary: one short sentence, max 22 words.",
+            "Action: one short sentence only if the user must do something important soon; otherwise write Action: None.",
+            "Ignore marketing fluff, tracking text, unsubscribe text, and repeated footer content."
+          ].join(" ")
       },
       {
         role: "user",

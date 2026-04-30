@@ -162,11 +162,7 @@ struct EmailDetailView: View {
                 }
             }
 
-            Text(summary ?? "Summarizing this email...")
-                .font(.system(size: 14))
-                .foregroundStyle(Theme.Palette.textSecondary)
-                .lineSpacing(2)
-                .textSelection(.enabled)
+            SummaryContentView(summary: summary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(18)
@@ -271,6 +267,73 @@ struct EmailDetailView: View {
             errorMessage = nil
         } catch {
             errorMessage = "Could not update email."
+        }
+    }
+}
+
+private struct SummaryContentView: View {
+    let summary: String?
+
+    private var cleanedSummary: (summary: String, action: String?)? {
+        guard let summary, !summary.isEmpty else { return nil }
+
+        let lines = summary
+            .replacingOccurrences(of: "*", with: "")
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        var summaryText = ""
+        var actionText: String?
+
+        for line in lines {
+            let lowercased = line.lowercased()
+            if lowercased.hasPrefix("summary:") {
+                summaryText = String(line.dropFirst("summary:".count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            } else if lowercased.hasPrefix("action:") {
+                let value = String(line.dropFirst("action:".count)).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !value.isEmpty && value.lowercased() != "none" {
+                    actionText = value
+                }
+            } else if summaryText.isEmpty {
+                summaryText = line
+            }
+        }
+
+        return (summaryText.isEmpty ? summary : summaryText, actionText)
+    }
+
+    var body: some View {
+        if let cleanedSummary {
+            VStack(alignment: .leading, spacing: 12) {
+                Text(cleanedSummary.summary)
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(Theme.Palette.textPrimary.opacity(0.92))
+                    .lineSpacing(3)
+                    .textSelection(.enabled)
+
+                if let action = cleanedSummary.action {
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(Theme.Palette.accentSoft)
+                            .padding(.top, 2)
+
+                        Text(action)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(Theme.Palette.textSecondary)
+                            .lineSpacing(2)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .background(Theme.Palette.surfaceElevated.opacity(0.65))
+                    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.button, style: .continuous))
+                }
+            }
+        } else {
+            Text("Summarizing this email...")
+                .font(.system(size: 14))
+                .foregroundStyle(Theme.Palette.textSecondary)
         }
     }
 }
