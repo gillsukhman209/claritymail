@@ -32,6 +32,32 @@ struct APIClient {
         return response.blockedSenders
     }
 
+    func importantSenders(accountId: String? = nil) async throws -> [ImportantSender] {
+        let response: ImportantSendersResponse = try await get(
+            "/important-senders",
+            queryItems: accountQueryItems(accountId: accountId)
+        )
+        return response.importantSenders
+    }
+
+    func markSenderImportant(id: Email.ID, accountId: String? = nil) async throws -> String {
+        let response: ImportantSenderActionResponse = try await postForResponse(
+            "/emails/\(id)/important-sender",
+            queryItems: accountQueryItems(accountId: accountId)
+        )
+        return response.senderEmail
+    }
+
+    func removeImportantSender(accountId: String, senderEmail: String) async throws {
+        try await delete(
+            "/important-senders",
+            queryItems: [
+                URLQueryItem(name: "accountId", value: accountId),
+                URLQueryItem(name: "senderEmail", value: senderEmail)
+            ]
+        )
+    }
+
     func unblockSender(accountId: String, senderEmail: String) async throws {
         try await delete(
             "/blocked-senders",
@@ -50,11 +76,18 @@ struct APIClient {
         accountId: String? = nil,
         searchQuery: String? = nil,
         folder: MailboxFolder = .inbox,
-        pageToken: String? = nil
+        pageToken: String? = nil,
+        priorityOnly: Bool = false
     ) async throws -> EmailPage {
         let response: EmailsResponse = try await get(
             "/emails",
-            queryItems: accountQueryItems(accountId: accountId, searchQuery: searchQuery, folder: folder, pageToken: pageToken)
+            queryItems: accountQueryItems(
+                accountId: accountId,
+                searchQuery: searchQuery,
+                folder: folder,
+                pageToken: pageToken,
+                priorityOnly: priorityOnly
+            )
         )
         return EmailPage(emails: response.emails, nextPageToken: response.nextPageToken)
     }
@@ -410,7 +443,8 @@ struct APIClient {
         accountId: String?,
         searchQuery: String? = nil,
         folder: MailboxFolder? = nil,
-        pageToken: String? = nil
+        pageToken: String? = nil,
+        priorityOnly: Bool = false
     ) -> [URLQueryItem] {
         var items: [URLQueryItem] = []
         if let accountId, !accountId.isEmpty {
@@ -424,6 +458,9 @@ struct APIClient {
         }
         if let pageToken, !pageToken.isEmpty {
             items.append(URLQueryItem(name: "pageToken", value: pageToken))
+        }
+        if priorityOnly {
+            items.append(URLQueryItem(name: "priorityOnly", value: "true"))
         }
         return items
     }
@@ -523,6 +560,14 @@ private struct BlockedSendersResponse: Decodable {
     let blockedSenders: [BlockedSender]
 }
 
+private struct ImportantSendersResponse: Decodable {
+    let importantSenders: [ImportantSender]
+}
+
+private struct ImportantSenderActionResponse: Decodable {
+    let senderEmail: String
+}
+
 private struct AccountsResponse: Decodable {
     let accounts: [GmailAccount]
 }
@@ -548,6 +593,14 @@ struct BlockedSender: Identifiable, Hashable, Decodable {
     let accountId: String
     let accountEmail: String
     let senderEmail: String
+}
+
+struct ImportantSender: Identifiable, Hashable, Decodable {
+    let id: String
+    let accountId: String
+    let accountEmail: String
+    let senderEmail: String
+    let senderName: String
 }
 
 struct EmailAttachmentUpload: Encodable {

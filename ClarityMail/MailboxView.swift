@@ -16,6 +16,7 @@ struct MailboxView: View {
     @State private var accounts: [GmailAccount] = []
     @State private var selectedAccountId: String?
     @State private var selectedFolder: MailboxFolder = .inbox
+    @State private var isPriorityMode = false
     @State private var searchText = ""
     @State private var isLoading = false
     @State private var errorMessage: String?
@@ -56,6 +57,7 @@ struct MailboxView: View {
                             accounts: accounts,
                             selectedAccountId: $selectedAccountId,
                             selectedFolder: $selectedFolder,
+                            isPriorityMode: $isPriorityMode,
                             searchText: $searchText,
                             onAddAccount: {
                                 Task { await session.signInWithGoogle() }
@@ -77,6 +79,7 @@ struct MailboxView: View {
 
                         EmailListSection(
                             emails: emails,
+                            isPriorityMode: isPriorityMode,
                             isLoading: isLoading,
                             isSearchLoading: isLoading && !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                             isLoadingMore: isLoadingMore,
@@ -185,6 +188,8 @@ struct MailboxView: View {
                     emails.removeAll {
                         $0.senderEmailAddress.caseInsensitiveCompare(blockedSender) == .orderedSame
                     }
+                } onPrioritySenderChanged: { senderEmail, isImportant in
+                    updatePrioritySender(senderEmail: senderEmail, isImportant: isImportant)
                 }
             }
             .task {
@@ -207,6 +212,15 @@ struct MailboxView: View {
                 }
             }
             .onChange(of: selectedFolder) {
+                selectedEmail = nil
+                knownEmailIds.removeAll()
+                hasLoadedInitialEmails = false
+                nextPageToken = nil
+                Task {
+                    await loadEmails()
+                }
+            }
+            .onChange(of: isPriorityMode) {
                 selectedEmail = nil
                 knownEmailIds.removeAll()
                 hasLoadedInitialEmails = false
@@ -279,7 +293,12 @@ struct MailboxView: View {
         defer { isLoading = false }
 
         do {
-            let page = try await apiClient.emails(accountId: selectedAccountId, searchQuery: searchText, folder: selectedFolder)
+            let page = try await apiClient.emails(
+                accountId: selectedAccountId,
+                searchQuery: searchText,
+                folder: selectedFolder,
+                priorityOnly: isPriorityMode
+            )
             let fetchedEmails = page.emails
             let fetchedIds = Set(fetchedEmails.map(\.id))
             mergeRecipientSuggestions(from: fetchedEmails)
@@ -316,7 +335,8 @@ struct MailboxView: View {
                 accountId: selectedAccountId,
                 searchQuery: searchText,
                 folder: selectedFolder,
-                pageToken: nextPageToken
+                pageToken: nextPageToken,
+                priorityOnly: isPriorityMode
             )
             mergeRecipientSuggestions(from: page.emails)
             emails.append(contentsOf: page.emails.filter { newEmail in
@@ -344,6 +364,40 @@ struct MailboxView: View {
         ) + recipientSuggestions
 
         recipientSuggestions = EmailContact.deduped(recipientSuggestions)
+    }
+
+    private func updatePrioritySender(senderEmail: String, isImportant: Bool) {
+        let normalizedSender = senderEmail.lowercased()
+        emails = emails
+            .map { email in
+                var updated = email
+                if email.senderEmailAddress.lowercased() == normalizedSender {
+                    updated.priorityStatus = isImportant ? .important : .normal
+                    updated.prioritySource = isImportant ? .manualSender : nil
+                    updated.priorityReason = isImportant ? "Important sender" : nil
+                }
+                return updated
+            }
+
+        if isPriorityMode && !isImportant {
+            emails.removeAll { $0.senderEmailAddress.lowercased() == normalizedSender }
+        } else if !isPriorityMode {
+            emails.sort { $0.receivedAt > $1.receivedAt }
+        } else {
+            emails.sort { left, right in
+                let leftScore = prioritySortScore(left)
+                let rightScore = prioritySortScore(right)
+                if leftScore != rightScore {
+                    return leftScore > rightScore
+                }
+                return left.receivedAt > right.receivedAt
+            }
+        }
+    }
+
+    private func prioritySortScore(_ email: Email) -> Int {
+        guard email.isPriority else { return 0 }
+        return email.isManualPrioritySender ? 3 : 2
     }
 
     private var selectedEmails: [Email] {
@@ -786,6 +840,7 @@ private struct AccountSearchBar: View {
     let accounts: [GmailAccount]
     @Binding var selectedAccountId: String?
     @Binding var selectedFolder: MailboxFolder
+    @Binding var isPriorityMode: Bool
     @Binding var searchText: String
     let onAddAccount: () -> Void
     let onRefreshAccounts: () -> Void
@@ -824,6 +879,28 @@ private struct AccountSearchBar: View {
                         }
                         .buttonStyle(.plain)
                     }
+
+                    Button {
+                        isPriorityMode.toggle()
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: isPriorityMode ? "bolt.circle.fill" : "bolt.circle")
+                            Text("Priority")
+                        }
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(isPriorityMode ? .white : Theme.Palette.textSecondary)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 9)
+                        .background(
+                            Capsule()
+                                .fill(isPriorityMode ? Theme.Palette.accent : Theme.Palette.surface.opacity(0.65))
+                        )
+                        .overlay(
+                            Capsule()
+                                .strokeBorder(isPriorityMode ? Color.clear : Theme.Palette.border, lineWidth: 1)
+                        )
+                    }
+                    .buttonStyle(.plain)
                 }
             }
             .scrollIndicators(.hidden)
@@ -1017,6 +1094,7 @@ private enum BulkEmailAction: String, CaseIterable {
 
 private struct EmailListSection: View {
     let emails: [Email]
+    let isPriorityMode: Bool
     let isLoading: Bool
     let isSearchLoading: Bool
     let isLoadingMore: Bool
@@ -1068,6 +1146,7 @@ private struct EmailListSection: View {
                         } label: {
                             EmailRowView(
                                 email: email,
+                                showPriorityLabel: isPriorityMode || email.isManualPrioritySender,
                                 isSelectionMode: isSelectionMode,
                                 isSelected: selectedEmailIds.contains(email.id),
                                 onToggleSelection: {
@@ -1215,6 +1294,7 @@ private struct SearchLoadingView: View {
 
 private struct EmailRowView: View {
     let email: Email
+    var showPriorityLabel = false
     var isSelectionMode = false
     var isSelected = false
     var onToggleSelection: () -> Void = {}
@@ -1253,6 +1333,21 @@ private struct EmailRowView: View {
                     .foregroundStyle(Theme.Palette.textPrimary)
                     .lineLimit(1)
 
+                if email.isPriority && showPriorityLabel {
+                    HStack(spacing: 5) {
+                        Image(systemName: email.isManualPrioritySender ? "bolt.fill" : "sparkles")
+                            .font(.system(size: 10, weight: .bold))
+                        Text(email.priorityReason?.isEmpty == false ? email.priorityReason! : "Priority")
+                            .lineLimit(1)
+                    }
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Theme.Palette.accentSoft)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Theme.Palette.accent.opacity(0.12))
+                    .clipShape(Capsule())
+                }
+
                 HStack(alignment: .top, spacing: 8) {
                     Text(email.snippet)
                         .font(.system(size: 13))
@@ -1275,11 +1370,14 @@ private struct EmailRowView: View {
         .padding(.vertical, 14)
         .background(
             RoundedRectangle(cornerRadius: Theme.Radius.row, style: .continuous)
-                .fill(Theme.Palette.surface.opacity(0.6))
+                .fill(email.isManualPrioritySender ? Theme.Palette.accent.opacity(0.08) : Theme.Palette.surface.opacity(0.6))
         )
         .overlay(
             RoundedRectangle(cornerRadius: Theme.Radius.row, style: .continuous)
-                .strokeBorder(isSelected ? Theme.Palette.accent.opacity(0.75) : Theme.Palette.border, lineWidth: isSelected ? 1.5 : 1)
+                .strokeBorder(
+                    isSelected || email.isManualPrioritySender ? Theme.Palette.accent.opacity(email.isManualPrioritySender ? 0.55 : 0.75) : Theme.Palette.border,
+                    lineWidth: isSelected || email.isManualPrioritySender ? 1.5 : 1
+                )
         )
         .onLongPressGesture {
             onToggleSelection()

@@ -16,6 +16,7 @@ struct EmailDetailView: View {
     let accounts: [GmailAccount]
     let recipientSuggestions: [EmailContact]
     let onBlockedSender: ((String) -> Void)?
+    let onPrioritySenderChanged: ((String, Bool) -> Void)?
     @Environment(\.dismiss) private var dismiss
     @State private var loadedEmail: Email?
     @State private var threadEmails: [Email] = []
@@ -151,6 +152,22 @@ struct EmailDetailView: View {
                         Label("Block Sender", systemImage: "hand.raised")
                     }
                     .keyboardShortcut("b", modifiers: [.command])
+
+                    Divider()
+
+                    if visibleEmail.isManualPrioritySender {
+                        Button {
+                            Task { await removeImportantSender() }
+                        } label: {
+                            Label("Remove Important Sender", systemImage: "bolt.slash")
+                        }
+                    } else {
+                        Button {
+                            Task { await markImportantSender() }
+                        } label: {
+                            Label("Mark Sender Important", systemImage: "bolt.circle")
+                        }
+                    }
                 } label: {
                     Image(systemName: "ellipsis.circle")
                 }
@@ -456,6 +473,45 @@ struct EmailDetailView: View {
             onBlockedSender?(blockedSenderEmail)
             dismiss()
         }
+    }
+
+    private func markImportantSender() async {
+        var importantSenderEmail: String?
+
+        await performAction {
+            importantSenderEmail = try await apiClient.markSenderImportant(id: visibleEmail.id, accountId: accountId)
+        }
+
+        if errorMessage == nil, let importantSenderEmail {
+            applyPrioritySenderChange(senderEmail: importantSenderEmail, isImportant: true)
+        }
+    }
+
+    private func removeImportantSender() async {
+        guard let resolvedAccountId = visibleEmail.accountId ?? accountId else {
+            errorMessage = "Could not remove important sender."
+            return
+        }
+
+        let senderEmail = visibleEmail.senderEmailAddress
+        await performAction {
+            try await apiClient.removeImportantSender(accountId: resolvedAccountId, senderEmail: senderEmail)
+        }
+
+        if errorMessage == nil {
+            applyPrioritySenderChange(senderEmail: senderEmail, isImportant: false)
+        }
+    }
+
+    private func applyPrioritySenderChange(senderEmail: String, isImportant: Bool) {
+        if loadedEmail == nil {
+            loadedEmail = email
+        }
+
+        loadedEmail?.priorityStatus = isImportant ? .important : .normal
+        loadedEmail?.prioritySource = isImportant ? .manualSender : nil
+        loadedEmail?.priorityReason = isImportant ? "Important sender" : nil
+        onPrioritySenderChanged?(senderEmail.lowercased(), isImportant)
     }
 
     private func performAction(_ action: () async throws -> Void) async {

@@ -23,6 +23,17 @@ struct Email: Identifiable, Hashable, Codable {
     var body: String?
     var htmlBody: String?
     var attachments: [EmailAttachment]?
+    var priorityStatus: EmailPriorityStatus? = nil
+    var prioritySource: EmailPrioritySource? = nil
+    var priorityReason: String? = nil
+
+    var isPriority: Bool {
+        priorityStatus == .important
+    }
+
+    var isManualPrioritySender: Bool {
+        prioritySource == .manualSender
+    }
 
     var senderEmailAddress: String {
         if let start = sender.lastIndex(of: "<"),
@@ -139,7 +150,23 @@ struct Email: Identifiable, Hashable, Codable {
         case body
         case htmlBody
         case attachments
+        case priorityStatus
+        case prioritySource
+        case priorityReason
     }
+}
+
+enum EmailPriorityStatus: String, Codable, Hashable {
+    case important
+    case normal
+    case ignored
+}
+
+enum EmailPrioritySource: String, Codable, Hashable {
+    case manualSender = "manual_sender"
+    case ai
+    case rules
+    case gmail
 }
 
 struct EmailContact: Identifiable, Hashable {

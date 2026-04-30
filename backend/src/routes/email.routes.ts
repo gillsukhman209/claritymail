@@ -9,6 +9,12 @@ import {
   saveBlockedSender
 } from "../db/blockedSenders.repo.js";
 import {
+  deleteImportantSender,
+  listImportantSenderEmails,
+  listImportantSenders,
+  saveImportantSender
+} from "../db/importantSenders.repo.js";
+import {
   archiveEmail,
   blockSenderInGmail,
   createDraft,
@@ -31,6 +37,7 @@ import {
   unstarEmail
 } from "../services/gmail.service.js";
 import { summarizeEmail } from "../services/ai.service.js";
+import { enrichEmailsWithPriority, senderDisplayName, sortPriorityEmails } from "../services/priority.service.js";
 
 export const emailRoutes = Router();
 
@@ -100,6 +107,7 @@ emailRoutes.get("/emails", async (request, response, next) => {
     const query = typeof request.query.q === "string" ? request.query.q : undefined;
     const accountId = typeof request.query.accountId === "string" ? request.query.accountId : undefined;
     const folder = mailboxFolderFromQuery(request.query.folder);
+    const priorityOnly = request.query.priorityOnly === "true" || request.query.priorityOnly === "1";
     const pageState = decodePageState(request.query.pageToken);
 
     if (accountId) {
@@ -110,8 +118,18 @@ emailRoutes.get("/emails", async (request, response, next) => {
       }
 
       const result = await listMailboxEmails(account, { query, folder, pageToken: pageState[accountId] });
+      const blockedFilteredEmails = filterBlockedEmails(result.emails, await listBlockedSenderEmails(account.id ?? accountId));
+      const emailsWithPriority = await enrichEmailsWithPriority(
+        account.id ?? accountId,
+        blockedFilteredEmails,
+        await listImportantSenderEmails(account.id ?? accountId)
+      );
+      const emails = priorityOnly
+        ? sortPriorityEmails(emailsWithPriority.filter((email: any) => email.priorityStatus === "important"))
+        : sortNewestFirst(emailsWithPriority);
+
       response.json({
-        emails: filterBlockedEmails(result.emails, await listBlockedSenderEmails(account.id ?? accountId)),
+        emails,
         nextPageToken: encodePageState({ [accountId]: result.nextPageToken })
       });
       return;
@@ -126,18 +144,30 @@ emailRoutes.get("/emails", async (request, response, next) => {
         }
 
         const result = await listMailboxEmails(account, { query, folder, pageToken: pageState[accountSummary.id] });
+        const blockedFilteredEmails = filterBlockedEmails(
+          result.emails,
+          await listBlockedSenderEmails(account.id ?? accountSummary.id)
+        );
+        const emailsWithPriority = await enrichEmailsWithPriority(
+          account.id ?? accountSummary.id,
+          blockedFilteredEmails,
+          await listImportantSenderEmails(account.id ?? accountSummary.id)
+        );
+
         return {
-          emails: filterBlockedEmails(result.emails, await listBlockedSenderEmails(account.id ?? accountSummary.id)),
+          emails: priorityOnly
+            ? emailsWithPriority.filter((email: any) => email.priorityStatus === "important")
+            : emailsWithPriority,
           accountId: accountSummary.id,
           nextPageToken: result.nextPageToken
         };
       })
     );
 
-    const emails = emailGroups
-      .flatMap((group) => group.emails)
-      .sort((left, right) => Date.parse(right.receivedAt) - Date.parse(left.receivedAt))
-      .slice(0, 50);
+    const emails = (priorityOnly
+      ? sortPriorityEmails(emailGroups.flatMap((group) => group.emails))
+      : sortNewestFirst(emailGroups.flatMap((group) => group.emails))
+    ).slice(0, 50);
 
     response.json({
       emails,
@@ -149,6 +179,10 @@ emailRoutes.get("/emails", async (request, response, next) => {
     next(error);
   }
 });
+
+function sortNewestFirst<T extends { receivedAt: string }>(emails: T[]) {
+  return emails.sort((left, right) => Date.parse(right.receivedAt) - Date.parse(left.receivedAt));
+}
 
 emailRoutes.post("/emails/:id/summary", async (request, response, next) => {
   try {
@@ -440,6 +474,59 @@ emailRoutes.delete("/blocked-senders", async (request, response, next) => {
     await unblockSenderInGmail(account, senderEmail);
     await deleteBlockedSender({ accountId, senderEmail });
 
+    response.json({ ok: true, senderEmail });
+  } catch (error) {
+    next(error);
+  }
+});
+
+emailRoutes.post("/emails/:id/important-sender", async (request, response, next) => {
+  try {
+    const account = await requireSelectedAccount(request, response);
+    if (!account) return;
+
+    if (!account.id || !account.email) {
+      response.status(400).json({ error: "Connected Gmail account is missing account metadata." });
+      return;
+    }
+
+    const email = await getEmail(account, request.params.id);
+    const senderEmail = normalizeEmailAddress(email.sender);
+
+    await saveImportantSender({
+      accountId: account.id,
+      accountEmail: account.email,
+      senderEmail,
+      senderName: senderDisplayName(email.sender)
+    });
+
+    response.json({ ok: true, senderEmail });
+  } catch (error) {
+    next(error);
+  }
+});
+
+emailRoutes.get("/important-senders", async (request, response, next) => {
+  try {
+    const accountId = typeof request.query.accountId === "string" ? request.query.accountId : undefined;
+    response.json({ importantSenders: await listImportantSenders(accountId) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+emailRoutes.delete("/important-senders", async (request, response, next) => {
+  try {
+    const accountId = typeof request.query.accountId === "string" ? request.query.accountId : undefined;
+    const senderEmail =
+      typeof request.query.senderEmail === "string" ? normalizeEmailAddress(request.query.senderEmail) : undefined;
+
+    if (!accountId || !senderEmail) {
+      response.status(400).json({ error: "Missing accountId or senderEmail." });
+      return;
+    }
+
+    await deleteImportantSender({ accountId, senderEmail });
     response.json({ ok: true, senderEmail });
   } catch (error) {
     next(error);

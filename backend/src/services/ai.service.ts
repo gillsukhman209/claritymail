@@ -75,6 +75,21 @@ export type MorningBriefSummary = {
   ignored: MorningBriefItem[];
 };
 
+export type PriorityClassificationInput = {
+  id: string;
+  sender: string;
+  subject: string;
+  snippet: string;
+  body?: string;
+  receivedAt: string;
+};
+
+export type PriorityClassification = {
+  id: string;
+  status: "important" | "normal" | "ignored";
+  reason: string;
+};
+
 function emptyMorningBriefSummary(): MorningBriefSummary {
   return {
     important: [],
@@ -168,4 +183,79 @@ export async function summarizeMorningBrief(input: {
   });
 
   return parseMorningBriefJSON(completion.choices[0]?.message?.content ?? "");
+}
+
+function parsePriorityJSON(value: string, fallbackIds: string[]): PriorityClassification[] {
+  const jsonStart = value.indexOf("{");
+  const jsonEnd = value.lastIndexOf("}");
+  if (jsonStart === -1 || jsonEnd === -1 || jsonEnd <= jsonStart) {
+    return fallbackIds.map((id) => ({ id, status: "normal", reason: "" }));
+  }
+
+  try {
+    const parsed = JSON.parse(value.slice(jsonStart, jsonEnd + 1));
+    const items = Array.isArray(parsed.emails) ? parsed.emails : [];
+    return fallbackIds.map((id) => {
+      const item = items.find((candidate: any) => String(candidate.id) === id);
+      const status =
+        item?.status === "important" || item?.status === "ignored" || item?.status === "normal"
+          ? item.status
+          : "normal";
+      return {
+        id,
+        status,
+        reason: String(item?.reason ?? "").slice(0, 90)
+      };
+    });
+  } catch {
+    return fallbackIds.map((id) => ({ id, status: "normal", reason: "" }));
+  }
+}
+
+export async function classifyEmailPriorityBatch(input: { emails: PriorityClassificationInput[] }) {
+  if (input.emails.length === 0) return [];
+
+  const openai = getOpenAIClient();
+  const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
+  const emails = input.emails.slice(0, 30).map((email) => ({
+    id: email.id,
+    sender: email.sender,
+    subject: email.subject,
+    receivedAt: email.receivedAt,
+    snippet: email.snippet,
+    body: (email.body ?? "").slice(0, 900)
+  }));
+
+  const completion = await openai.chat.completions.create({
+    model,
+    messages: [
+      {
+        role: "system",
+        content: [
+          "You classify emails for a personal email client Priority Mode.",
+          "Return valid JSON only. No markdown.",
+          "Schema: {\"emails\":[{\"id\":\"email id\",\"status\":\"important|normal|ignored\",\"reason\":\"short reason\"}]}",
+          "Be strict. Most emails are normal or ignored, not important.",
+          "Important means the user likely loses money, misses an appointment, misses a required action, or misses a direct personal/work/client/legal/medical/security/insurance/billing issue.",
+          "Financial is important only for real account activity, fraud/security, due payments, failed payments, direct deposits, bills, claims, or required review.",
+          "Security or fraud content is important only when it is about the user's own account, login, password, card, identity, transaction, or required action.",
+          "Security/fraud marketing is ignored, including reports, guides, research, tools, shared intel, webinars, and downloads.",
+          "Financial marketing is ignored, including card offers, money-saving features, rewards, free credits, pre-qualification, car finance ads, loans, promos, discounts, and shopping suggestions.",
+          "Ignored means: discounts, coupons, promo codes, sales, newsletters, marketing, rewards offers, social/app engagement, gig-work availability, optional waitlists, optional recruiting ads, generic receipts, automated low-value updates, and optional shopping/car listings.",
+          "Normal means useful but not urgent enough for Priority.",
+          "Do not mark a promo, discount, deal, optional signup, optional gig-work offer, newsletter, or forwarded promotion as important just because it expires soon.",
+          "Do not mark an email important just because it contains the words reply, confirmation, account, finance, fraud, claim, expires, credits, report, waitlist, or review.",
+          "Reasons must be short and user-facing, like 'Appointment today', 'Needs reply', 'Payment issue', or empty for ignored/normal."
+        ].join(" ")
+      },
+      {
+        role: "user",
+        content: JSON.stringify({ emails })
+      }
+    ],
+    max_completion_tokens: 1200,
+    response_format: { type: "json_object" }
+  });
+
+  return parsePriorityJSON(completion.choices[0]?.message?.content ?? "", emails.map((email) => email.id));
 }
