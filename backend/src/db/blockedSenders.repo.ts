@@ -43,6 +43,31 @@ export async function listBlockedSenderEmails(accountId: string) {
   );
 }
 
+export async function listBlockedSenders(accountId?: string) {
+  const db = getFirestore();
+  const query = accountId
+    ? db.collection("blockedSenders").where("accountId", "==", accountId)
+    : db.collection("blockedSenders");
+  const snapshot = await query.get();
+
+  return snapshot.docs.map((doc) => {
+    const data = doc.data();
+    return {
+      id: doc.id,
+      accountId: String(data.accountId ?? ""),
+      accountEmail: String(data.accountEmail ?? ""),
+      senderEmail: normalizeEmailAddress(String(data.senderEmail ?? ""))
+    };
+  });
+}
+
+export async function deleteBlockedSender(input: { accountId: string; senderEmail: string }) {
+  const senderEmail = normalizeEmailAddress(input.senderEmail);
+  const db = getFirestore();
+  await db.collection("blockedSenders").doc(blockedSenderDocId(input.accountId, senderEmail)).delete();
+  return senderEmail;
+}
+
 export function filterBlockedEmails<T extends { sender: string }>(emails: T[], blockedSenders: Set<string>) {
   if (blockedSenders.size === 0) {
     return emails;

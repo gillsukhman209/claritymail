@@ -259,6 +259,27 @@ export async function blockSenderInGmail(account: GmailAccount, senderEmail: str
   );
 }
 
+export async function unblockSenderInGmail(account: GmailAccount, senderEmail: string) {
+  const gmail = getGmailClient(account);
+
+  const filtersResponse = await gmail.users.settings.filters.list({
+    userId: "me"
+  });
+
+  const matchingFilters = (filtersResponse.data.filter ?? []).filter(
+    (filter) => filter.id && filter.criteria?.from?.toLowerCase() === senderEmail.toLowerCase()
+  );
+
+  await Promise.all(
+    matchingFilters.map((filter) =>
+      gmail.users.settings.filters.delete({
+        userId: "me",
+        id: filter.id ?? ""
+      })
+    )
+  );
+}
+
 export async function markEmailRead(account: GmailAccount, id: string) {
   const gmail = getGmailClient(account);
   await gmail.users.messages.modify({

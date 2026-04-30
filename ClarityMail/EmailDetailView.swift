@@ -69,6 +69,7 @@ struct EmailDetailView: View {
                     Label("Reply", systemImage: "arrowshape.turn.up.left")
                 }
                 .disabled(isPerformingAction)
+                .keyboardShortcut("r", modifiers: [.command])
             }
 
             ToolbarItem(placement: .primaryAction) {
@@ -79,6 +80,7 @@ struct EmailDetailView: View {
                         Label(visibleEmail.isStarred ? "Unstar" : "Star",
                               systemImage: visibleEmail.isStarred ? "star.fill" : "star")
                     }
+                    .keyboardShortcut("l", modifiers: [.command])
 
                     Button {
                         Task { await toggleRead() }
@@ -86,24 +88,28 @@ struct EmailDetailView: View {
                         Label(visibleEmail.isRead ? "Mark Unread" : "Mark Read",
                               systemImage: visibleEmail.isRead ? "envelope.badge" : "envelope.open")
                     }
+                    .keyboardShortcut("u", modifiers: [.command])
 
                     Button {
                         Task { await archive() }
                     } label: {
                         Label("Archive", systemImage: "archivebox")
                     }
+                    .keyboardShortcut("e", modifiers: [.command])
 
                     Button(role: .destructive) {
                         Task { await trash() }
                     } label: {
                         Label("Trash", systemImage: "trash")
                     }
+                    .keyboardShortcut(.delete, modifiers: [])
 
                     Button(role: .destructive) {
                         Task { await blockSender() }
                     } label: {
                         Label("Block Sender", systemImage: "hand.raised")
                     }
+                    .keyboardShortcut("b", modifiers: [.command])
                 } label: {
                     Image(systemName: "ellipsis.circle")
                 }

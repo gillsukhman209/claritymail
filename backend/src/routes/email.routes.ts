@@ -1,8 +1,10 @@
 import { Router } from "express";
 import { getGoogleAccountById, getLatestGoogleAccount, listGoogleAccounts } from "../db/accounts.repo.js";
 import {
+  deleteBlockedSender,
   filterBlockedEmails,
   listBlockedSenderEmails,
+  listBlockedSenders,
   normalizeEmailAddress,
   saveBlockedSender
 } from "../db/blockedSenders.repo.js";
@@ -18,6 +20,7 @@ import {
   sendEmail,
   starEmail,
   trashEmail,
+  unblockSenderInGmail,
   unstarEmail
 } from "../services/gmail.service.js";
 import { summarizeEmail } from "../services/ai.service.js";
@@ -211,6 +214,41 @@ emailRoutes.post("/emails/:id/block-sender", async (request, response, next) => 
     });
 
     await blockSenderInGmail(account, senderEmail);
+
+    response.json({ ok: true, senderEmail });
+  } catch (error) {
+    next(error);
+  }
+});
+
+emailRoutes.get("/blocked-senders", async (request, response, next) => {
+  try {
+    const accountId = typeof request.query.accountId === "string" ? request.query.accountId : undefined;
+    response.json({ blockedSenders: await listBlockedSenders(accountId) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+emailRoutes.delete("/blocked-senders", async (request, response, next) => {
+  try {
+    const accountId = typeof request.query.accountId === "string" ? request.query.accountId : undefined;
+    const senderEmail =
+      typeof request.query.senderEmail === "string" ? normalizeEmailAddress(request.query.senderEmail) : undefined;
+
+    if (!accountId || !senderEmail) {
+      response.status(400).json({ error: "Missing accountId or senderEmail." });
+      return;
+    }
+
+    const account = await getGoogleAccountById(accountId);
+    if (!account) {
+      response.status(401).json({ error: "No Gmail account connected." });
+      return;
+    }
+
+    await unblockSenderInGmail(account, senderEmail);
+    await deleteBlockedSender({ accountId, senderEmail });
 
     response.json({ ok: true, senderEmail });
   } catch (error) {

@@ -20,6 +20,7 @@ struct MailboxView: View {
     @State private var isLoading = false
     @State private var errorMessage: String?
     @State private var isShowingComposer = false
+    @State private var isShowingBlockedSenders = false
     @State private var autoRefreshTask: Task<Void, Never>?
     @State private var searchTask: Task<Void, Never>?
     @State private var knownEmailIds = Set<String>()
@@ -54,6 +55,9 @@ struct MailboxView: View {
                                     await loadAccounts()
                                     await loadEmails()
                                 }
+                            },
+                            onManageBlockedSenders: {
+                                isShowingBlockedSenders = true
                             }
                         )
                         .padding(.horizontal, 20)
@@ -133,6 +137,9 @@ struct MailboxView: View {
                         Task { await loadEmails() }
                     }
                 }
+            }
+            .sheet(isPresented: $isShowingBlockedSenders) {
+                BlockedSendersView(accountId: selectedAccountId)
             }
             .refreshable {
                 await loadEmails(notifyForNewEmails: false)
@@ -218,6 +225,7 @@ private struct AccountSearchBar: View {
     @Binding var searchText: String
     let onAddAccount: () -> Void
     let onRefreshAccounts: () -> Void
+    let onManageBlockedSenders: () -> Void
 
     private var selectedAccount: GmailAccount? {
         guard let selectedAccountId else { return nil }
@@ -281,6 +289,10 @@ private struct AccountSearchBar: View {
 
                     Button(action: onRefreshAccounts) {
                         Label("Refresh Accounts", systemImage: "arrow.clockwise")
+                    }
+
+                    Button(action: onManageBlockedSenders) {
+                        Label("Blocked Senders", systemImage: "hand.raised")
                     }
                 } label: {
                     HStack(spacing: 8) {
@@ -670,6 +682,7 @@ private struct ComposeButton: View {
             .clipShape(Capsule())
         }
         .buttonStyle(.plain)
+        .keyboardShortcut("n", modifiers: [.command])
     }
 }
 

@@ -24,6 +24,24 @@ struct APIClient {
         return response.accounts
     }
 
+    func blockedSenders(accountId: String? = nil) async throws -> [BlockedSender] {
+        let response: BlockedSendersResponse = try await get(
+            "/blocked-senders",
+            queryItems: accountQueryItems(accountId: accountId)
+        )
+        return response.blockedSenders
+    }
+
+    func unblockSender(accountId: String, senderEmail: String) async throws {
+        try await delete(
+            "/blocked-senders",
+            queryItems: [
+                URLQueryItem(name: "accountId", value: accountId),
+                URLQueryItem(name: "senderEmail", value: senderEmail)
+            ]
+        )
+    }
+
     func emails(accountId: String? = nil, searchQuery: String? = nil, folder: MailboxFolder = .inbox) async throws -> [Email] {
         let response: EmailsResponse = try await get(
             "/emails",
@@ -156,6 +174,19 @@ struct APIClient {
         return try JSONDecoder().decode(T.self, from: data)
     }
 
+    private func delete(_ path: String, queryItems: [URLQueryItem] = []) async throws {
+        let url = makeURL(path, queryItems: queryItems)
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+
+        let (_, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200..<300).contains(httpResponse.statusCode) else {
+            throw APIError.badResponse
+        }
+    }
+
     private func postJSON<T: Encodable>(_ path: String, body: T) async throws {
         let url = makeURL(path)
         var request = URLRequest(url: url)
@@ -261,6 +292,10 @@ private struct BlockSenderResponse: Decodable {
     let senderEmail: String
 }
 
+private struct BlockedSendersResponse: Decodable {
+    let blockedSenders: [BlockedSender]
+}
+
 private struct AccountsResponse: Decodable {
     let accounts: [GmailAccount]
 }
@@ -274,6 +309,13 @@ struct GmailAccount: Identifiable, Hashable, Decodable {
 struct AuthStatus: Decodable {
     let isSignedIn: Bool
     let email: String?
+}
+
+struct BlockedSender: Identifiable, Hashable, Decodable {
+    let id: String
+    let accountId: String
+    let accountEmail: String
+    let senderEmail: String
 }
 
 private struct SendEmailRequest: Encodable {
