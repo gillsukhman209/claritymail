@@ -34,6 +34,19 @@ struct Email: Identifiable, Hashable, Codable {
         return sender
     }
 
+    var senderDisplayName: String {
+        if let start = sender.lastIndex(of: "<") {
+            let name = sender[..<start]
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+            if !name.isEmpty {
+                return name
+            }
+        }
+
+        return senderEmailAddress
+    }
+
     var senderLogoURLs: [URL] {
         let email = senderEmailAddress.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let domain = email.split(separator: "@").last else { return [] }
@@ -126,6 +139,95 @@ struct Email: Identifiable, Hashable, Codable {
         case body
         case htmlBody
         case attachments
+    }
+}
+
+struct EmailContact: Identifiable, Hashable {
+    let email: String
+    let name: String?
+
+    var id: String { email.lowercased() }
+
+    var displayName: String {
+        guard let name, !name.isEmpty, name.caseInsensitiveCompare(email) != .orderedSame else {
+            return email
+        }
+        return name
+    }
+
+    var subtitle: String? {
+        displayName == email ? nil : email
+    }
+
+    static func contacts(from emails: [Email], accounts: [GmailAccount]) -> [EmailContact] {
+        var contacts: [EmailContact] = []
+
+        for account in accounts {
+            contacts.append(EmailContact(email: account.email, name: "Me"))
+        }
+
+        for email in emails {
+            contacts.append(EmailContact(email: email.senderEmailAddress, name: email.senderDisplayName))
+            contacts.append(contentsOf: parseContacts(email.to))
+            if let accountEmail = email.accountEmail {
+                contacts.append(EmailContact(email: accountEmail, name: "Me"))
+            }
+        }
+
+        return deduped(contacts)
+    }
+
+    static func parseContacts(_ value: String?) -> [EmailContact] {
+        guard let value, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
+
+        return value
+            .split(whereSeparator: { ",;".contains($0) })
+            .compactMap { rawValue in
+                let raw = String(rawValue).trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !raw.isEmpty else { return nil }
+
+                if let start = raw.lastIndex(of: "<"),
+                   let end = raw.lastIndex(of: ">"),
+                   start < end {
+                    let email = String(raw[raw.index(after: start)..<end])
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    let name = raw[..<start]
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                        .trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+                    return EmailContact(email: email, name: name.isEmpty ? nil : String(name))
+                }
+
+                if raw.contains("@") {
+                    return EmailContact(email: raw.trimmingCharacters(in: CharacterSet(charactersIn: "<> ")), name: nil)
+                }
+
+                return nil
+            }
+    }
+
+    static func deduped(_ contacts: [EmailContact]) -> [EmailContact] {
+        var seen = Set<String>()
+        var result: [EmailContact] = []
+
+        for contact in contacts {
+            let normalized = contact.email
+                .lowercased()
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+
+            guard normalized.contains("@"), !seen.contains(normalized) else { continue }
+
+            seen.insert(normalized)
+            result.append(
+                EmailContact(
+                    email: contact.email.trimmingCharacters(in: .whitespacesAndNewlines),
+                    name: contact.name?.trimmingCharacters(in: .whitespacesAndNewlines)
+                )
+            )
+        }
+
+        return result.sorted {
+            $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
+        }
     }
 }
 

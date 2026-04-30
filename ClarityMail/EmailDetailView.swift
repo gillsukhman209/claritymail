@@ -14,6 +14,7 @@ struct EmailDetailView: View {
     let email: Email
     let accountId: String?
     let accounts: [GmailAccount]
+    let recipientSuggestions: [EmailContact]
     let onBlockedSender: ((String) -> Void)?
     @Environment(\.dismiss) private var dismiss
     @State private var loadedEmail: Email?
@@ -41,6 +42,8 @@ struct EmailDetailView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
                     headerSection
+
+                    deliveryDetailsCard
 
                     summaryCard
 
@@ -184,6 +187,51 @@ struct EmailDetailView: View {
         }
     }
 
+    private var deliveryDetailsCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            DeliveryDetailRow(
+                title: "From",
+                primary: visibleEmail.senderEmailAddress,
+                secondary: visibleEmail.senderDisplayName
+            )
+
+            Divider().overlay(Theme.Palette.border)
+
+            DeliveryDetailRow(
+                title: "To",
+                primary: toDisplayText,
+                secondary: receivedAccountText
+            )
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.Radius.row, style: .continuous)
+                .fill(Theme.Palette.surface.opacity(0.58))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.Radius.row, style: .continuous)
+                .strokeBorder(Theme.Palette.border, lineWidth: 1)
+        )
+    }
+
+    private var toDisplayText: String {
+        if let to = visibleEmail.to?.trimmingCharacters(in: .whitespacesAndNewlines), !to.isEmpty {
+            return to
+        }
+
+        if let accountEmail = visibleEmail.accountEmail, !accountEmail.isEmpty {
+            return accountEmail
+        }
+
+        return "Unknown recipient"
+    }
+
+    private var receivedAccountText: String? {
+        guard let accountEmail = visibleEmail.accountEmail, !accountEmail.isEmpty else { return nil }
+        guard toDisplayText.caseInsensitiveCompare(accountEmail) != .orderedSame else { return nil }
+        return "Received in \(accountEmail)"
+    }
+
     private var summaryCard: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
@@ -245,6 +293,7 @@ struct EmailDetailView: View {
                     mode: mode,
                     accountId: accountId ?? visibleEmail.accountId,
                     accounts: accounts,
+                    recipientSuggestions: recipientSuggestions,
                     onSent: {},
                     onClose: {
                         isPresented.wrappedValue = false
@@ -418,6 +467,39 @@ struct EmailDetailView: View {
             errorMessage = nil
         } catch {
             errorMessage = "Could not update email."
+        }
+    }
+}
+
+private struct DeliveryDetailRow: View {
+    let title: String
+    let primary: String
+    let secondary: String?
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Text(title)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Theme.Palette.textTertiary)
+                .frame(width: 44, alignment: .leading)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(primary)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Theme.Palette.textPrimary)
+                    .lineLimit(3)
+                    .textSelection(.enabled)
+
+                if let secondary, !secondary.isEmpty, secondary.caseInsensitiveCompare(primary) != .orderedSame {
+                    Text(secondary)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.Palette.textTertiary)
+                        .lineLimit(2)
+                        .textSelection(.enabled)
+                }
+            }
+
+            Spacer(minLength: 0)
         }
     }
 }

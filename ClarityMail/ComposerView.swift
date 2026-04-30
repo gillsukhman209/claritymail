@@ -24,6 +24,7 @@ struct ComposerView: View {
 
     let mode: Mode
     let accounts: [GmailAccount]
+    let recipientSuggestions: [EmailContact]
     let onSent: () -> Void
     let onClose: () -> Void
 
@@ -50,11 +51,13 @@ struct ComposerView: View {
         mode: Mode,
         accountId: String?,
         accounts: [GmailAccount] = [],
+        recipientSuggestions: [EmailContact] = [],
         onSent: @escaping () -> Void,
         onClose: @escaping () -> Void
     ) {
         self.mode = mode
         self.accounts = accounts
+        self.recipientSuggestions = recipientSuggestions
         self.onSent = onSent
         self.onClose = onClose
         _selectedAccountId = State(initialValue: accountId)
@@ -91,6 +94,58 @@ struct ComposerView: View {
 
     private var attachmentSizeText: String {
         ByteCountFormatter.string(fromByteCount: Int64(attachmentBytes), countStyle: .file)
+    }
+
+    private var currentRecipientQuery: String {
+        let separators = CharacterSet(charactersIn: ",;")
+        return to
+            .components(separatedBy: separators)
+            .last?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+
+    private var selectedRecipientEmails: Set<String> {
+        let separators = CharacterSet(charactersIn: ",;")
+        return Set(
+            to.components(separatedBy: separators)
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+                .filter { $0.contains("@") && $0 != currentRecipientQuery.lowercased() }
+        )
+    }
+
+    private var filteredRecipientSuggestions: [EmailContact] {
+        let query = currentRecipientQuery.lowercased()
+        guard !query.isEmpty else { return [] }
+
+        return recipientSuggestions
+            .filter { contact in
+                !selectedRecipientEmails.contains(contact.email.lowercased()) &&
+                (
+                    contact.email.lowercased().contains(query) ||
+                    contact.displayName.lowercased().contains(query)
+                )
+            }
+            .sorted { first, second in
+                let firstEmail = first.email.lowercased()
+                let secondEmail = second.email.lowercased()
+                let firstName = first.displayName.lowercased()
+                let secondName = second.displayName.lowercased()
+
+                let firstStarts = firstEmail.hasPrefix(query) || firstName.hasPrefix(query)
+                let secondStarts = secondEmail.hasPrefix(query) || secondName.hasPrefix(query)
+
+                if firstStarts != secondStarts {
+                    return firstStarts
+                }
+
+                return first.displayName.localizedCaseInsensitiveCompare(second.displayName) == .orderedAscending
+            }
+            .prefix(6)
+            .map { $0 }
+    }
+
+    private var shouldShowRecipientSuggestions: Bool {
+        focusedField == .to && !filteredRecipientSuggestions.isEmpty
     }
 
     var body: some View {
@@ -132,6 +187,16 @@ struct ComposerView: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
+
+                if shouldShowRecipientSuggestions {
+                    RecipientSuggestionList(
+                        contacts: filteredRecipientSuggestions,
+                        onSelect: selectRecipientSuggestion
+                    )
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 10)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+                }
 
                 Divider().overlay(Theme.Palette.border)
 
@@ -222,7 +287,8 @@ struct ComposerView: View {
                 .padding(.vertical, 12)
             }
         }
-        .frame(width: 520, height: 430)
+        .frame(minWidth: 320, maxWidth: 520)
+        .frame(height: shouldShowRecipientSuggestions ? 500 : 430)
         .background(Theme.Palette.surface)
         .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.row, style: .continuous))
         .overlay(
@@ -328,6 +394,27 @@ struct ComposerView: View {
             .menuStyle(.borderlessButton)
             .fixedSize()
         }
+    }
+
+    private func selectRecipientSuggestion(_ contact: EmailContact) {
+        let separators = CharacterSet(charactersIn: ",;")
+        var parts = to.components(separatedBy: separators)
+        if parts.isEmpty {
+            parts = [contact.email]
+        } else {
+            parts[parts.count - 1] = " \(contact.email)"
+        }
+
+        to = parts
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: ", ")
+
+        if !to.hasSuffix(", ") {
+            to += ", "
+        }
+
+        focusedField = .to
     }
 
     private func configureInitialValues() {
@@ -607,6 +694,81 @@ struct ComposerView: View {
         } catch {
             errorMessage = "Could not attach file."
         }
+    }
+}
+
+private struct RecipientSuggestionList: View {
+    let contacts: [EmailContact]
+    let onSelect: (EmailContact) -> Void
+
+    var body: some View {
+        VStack(spacing: 2) {
+            ForEach(contacts) { contact in
+                Button {
+                    onSelect(contact)
+                } label: {
+                    HStack(spacing: 10) {
+                        Circle()
+                            .fill(Theme.Palette.accent.opacity(0.16))
+                            .frame(width: 28, height: 28)
+                            .overlay(
+                                Text(initials(for: contact))
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundStyle(Theme.Palette.accentSoft)
+                            )
+
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(contact.displayName)
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(Theme.Palette.textPrimary)
+                                .lineLimit(1)
+
+                            if let subtitle = contact.subtitle {
+                                Text(subtitle)
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(Theme.Palette.textTertiary)
+                                    .lineLimit(1)
+                            }
+                        }
+
+                        Spacer()
+
+                        Image(systemName: "return")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(Theme.Palette.textTertiary)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(4)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.Radius.button, style: .continuous)
+                .fill(Theme.Palette.surfaceElevated.opacity(0.96))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.Radius.button, style: .continuous)
+                .strokeBorder(Theme.Palette.border, lineWidth: 1)
+        )
+    }
+
+    private func initials(for contact: EmailContact) -> String {
+        let source: String
+        if let name = contact.name, !name.isEmpty {
+            source = name
+        } else {
+            source = contact.email
+        }
+
+        let parts = source.split(separator: " ").prefix(2)
+        let initials = parts.compactMap { $0.first.map(String.init) }.joined()
+        if !initials.isEmpty {
+            return initials.uppercased()
+        }
+        return String(contact.email.prefix(1)).uppercased()
     }
 }
 

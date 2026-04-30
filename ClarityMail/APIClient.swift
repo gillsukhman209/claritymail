@@ -646,6 +646,16 @@ extension Date {
     var emailRowDateText: String {
         let formatter = DateFormatter()
         let calendar = Calendar.current
+        if calendar.isDateInToday(self) {
+            formatter.dateFormat = "h:mm a"
+            return "Today\n\(formatter.string(from: self))"
+        }
+
+        if calendar.isDateInYesterday(self) {
+            formatter.dateFormat = "h:mm a"
+            return "Yesterday\n\(formatter.string(from: self))"
+        }
+
         if calendar.component(.year, from: self) == calendar.component(.year, from: .now) {
             formatter.dateFormat = "MMM d\nh:mm a"
         } else {

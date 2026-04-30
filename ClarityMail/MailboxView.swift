@@ -34,6 +34,7 @@ struct MailboxView: View {
     @State private var isSelectionMode = false
     @State private var isPerformingBulkAction = false
     @State private var hasLoadedInitialEmails = false
+    @State private var recipientSuggestions: [EmailContact] = []
 
     private let apiClient = APIClient()
 
@@ -133,6 +134,7 @@ struct MailboxView: View {
                         mode: .compose,
                         accountId: selectedAccountId,
                         accounts: accounts,
+                        recipientSuggestions: recipientSuggestions,
                         onSent: {
                             Task { await loadEmails() }
                         },
@@ -151,6 +153,7 @@ struct MailboxView: View {
                         mode: .draft(draftToEdit),
                         accountId: selectedAccountId ?? draftToEdit.accountId,
                         accounts: accounts,
+                        recipientSuggestions: recipientSuggestions,
                         onSent: {
                             Task { await loadEmails() }
                         },
@@ -173,7 +176,12 @@ struct MailboxView: View {
             .animation(.snappy(duration: 0.2), value: draftToEdit)
             .modifier(HideNavigationBarModifier())
             .navigationDestination(item: $selectedEmail) { email in
-                EmailDetailView(email: email, accountId: selectedAccountId ?? email.accountId, accounts: accounts) { blockedSender in
+                EmailDetailView(
+                    email: email,
+                    accountId: selectedAccountId ?? email.accountId,
+                    accounts: accounts,
+                    recipientSuggestions: recipientSuggestions
+                ) { blockedSender in
                     emails.removeAll {
                         $0.senderEmailAddress.caseInsensitiveCompare(blockedSender) == .orderedSame
                     }
@@ -259,6 +267,7 @@ struct MailboxView: View {
             if let selectedAccountId, !accounts.contains(where: { $0.id == selectedAccountId }) {
                 self.selectedAccountId = nil
             }
+            mergeRecipientSuggestions(from: [])
             errorMessage = nil
         } catch {
             errorMessage = "Could not load accounts."
@@ -273,6 +282,7 @@ struct MailboxView: View {
             let page = try await apiClient.emails(accountId: selectedAccountId, searchQuery: searchText, folder: selectedFolder)
             let fetchedEmails = page.emails
             let fetchedIds = Set(fetchedEmails.map(\.id))
+            mergeRecipientSuggestions(from: fetchedEmails)
 
             if shouldNotifyForNewEmails(notifyForNewEmails: notifyForNewEmails) {
                 let newEmails = fetchedEmails
@@ -308,6 +318,7 @@ struct MailboxView: View {
                 folder: selectedFolder,
                 pageToken: nextPageToken
             )
+            mergeRecipientSuggestions(from: page.emails)
             emails.append(contentsOf: page.emails.filter { newEmail in
                 !emails.contains(where: { $0.id == newEmail.id })
             })
@@ -324,6 +335,15 @@ struct MailboxView: View {
         hasLoadedInitialEmails &&
         selectedFolder == .inbox &&
         searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func mergeRecipientSuggestions(from emails: [Email]) {
+        recipientSuggestions = EmailContact.contacts(
+            from: emails,
+            accounts: accounts
+        ) + recipientSuggestions
+
+        recipientSuggestions = EmailContact.deduped(recipientSuggestions)
     }
 
     private var selectedEmails: [Email] {
@@ -1232,13 +1252,6 @@ private struct EmailRowView: View {
                     .font(.system(size: 14, weight: email.isRead ? .regular : .medium))
                     .foregroundStyle(Theme.Palette.textPrimary)
                     .lineLimit(1)
-
-                if let accountEmail = email.accountEmail, !accountEmail.isEmpty {
-                    Text(accountEmail)
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(Theme.Palette.textTertiary)
-                        .lineLimit(1)
-                }
 
                 HStack(alignment: .top, spacing: 8) {
                     Text(email.snippet)
