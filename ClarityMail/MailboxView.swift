@@ -15,6 +15,7 @@ struct MailboxView: View {
     @State private var emails = Email.previewEmails
     @State private var accounts: [GmailAccount] = []
     @State private var selectedAccountId: String?
+    @State private var selectedFolder: MailboxFolder = .inbox
     @State private var searchText = ""
     @State private var isLoading = false
     @State private var errorMessage: String?
@@ -41,6 +42,7 @@ struct MailboxView: View {
                         AccountSearchBar(
                             accounts: accounts,
                             selectedAccountId: $selectedAccountId,
+                            selectedFolder: $selectedFolder,
                             searchText: $searchText,
                             onAddAccount: {
                                 Task { await session.signInWithGoogle() }
@@ -92,6 +94,12 @@ struct MailboxView: View {
                     await startRealtimeSync()
                 }
             }
+            .onChange(of: selectedFolder) {
+                selectedEmail = nil
+                Task {
+                    await loadEmails()
+                }
+            }
             .onChange(of: searchText) {
                 searchTask?.cancel()
                 searchTask = Task {
@@ -141,7 +149,7 @@ struct MailboxView: View {
         defer { isLoading = false }
 
         do {
-            emails = try await apiClient.emails(accountId: selectedAccountId, searchQuery: searchText)
+            emails = try await apiClient.emails(accountId: selectedAccountId, searchQuery: searchText, folder: selectedFolder)
             errorMessage = nil
         } catch {
             errorMessage = "Could not load inbox."
@@ -173,6 +181,7 @@ struct MailboxView: View {
 private struct AccountSearchBar: View {
     let accounts: [GmailAccount]
     @Binding var selectedAccountId: String?
+    @Binding var selectedFolder: MailboxFolder
     @Binding var searchText: String
     let onAddAccount: () -> Void
     let onRefreshAccounts: () -> Void
@@ -184,6 +193,35 @@ private struct AccountSearchBar: View {
 
     var body: some View {
         VStack(spacing: 10) {
+            ScrollView(.horizontal) {
+                HStack(spacing: 8) {
+                    ForEach(MailboxFolder.allCases) { folder in
+                        Button {
+                            selectedFolder = folder
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: folder.systemImage)
+                                Text(folder.title)
+                            }
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(selectedFolder == folder ? .white : Theme.Palette.textSecondary)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 9)
+                            .background(
+                                Capsule()
+                                    .fill(selectedFolder == folder ? Theme.Palette.accent : Theme.Palette.surface.opacity(0.65))
+                            )
+                            .overlay(
+                                Capsule()
+                                    .strokeBorder(selectedFolder == folder ? Color.clear : Theme.Palette.border, lineWidth: 1)
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            .scrollIndicators(.hidden)
+
             HStack(spacing: 10) {
                 Menu {
                     Button {

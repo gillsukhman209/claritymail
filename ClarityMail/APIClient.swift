@@ -24,10 +24,10 @@ struct APIClient {
         return response.accounts
     }
 
-    func emails(accountId: String? = nil, searchQuery: String? = nil) async throws -> [Email] {
+    func emails(accountId: String? = nil, searchQuery: String? = nil, folder: MailboxFolder = .inbox) async throws -> [Email] {
         let response: EmailsResponse = try await get(
             "/emails",
-            queryItems: accountQueryItems(accountId: accountId, searchQuery: searchQuery)
+            queryItems: accountQueryItems(accountId: accountId, searchQuery: searchQuery, folder: folder)
         )
         return response.emails
     }
@@ -98,6 +98,14 @@ struct APIClient {
         try await post("/gmail/watch", queryItems: accountQueryItems(accountId: accountId))
     }
 
+    func summarizeEmail(id: Email.ID, accountId: String? = nil) async throws -> String {
+        let response: EmailSummaryResponse = try await postJSONForResponse(
+            "/emails/\(id)/summary",
+            body: AccountRequest(accountId: accountId)
+        )
+        return response.summary
+    }
+
     private func get<T: Decodable>(_ path: String, queryItems: [URLQueryItem] = []) async throws -> T {
         let url = makeURL(path, queryItems: queryItems)
         let (data, response) = try await URLSession.shared.data(from: url)
@@ -140,6 +148,26 @@ struct APIClient {
         }
     }
 
+    private func postJSONForResponse<RequestBody: Encodable, ResponseBody: Decodable>(
+        _ path: String,
+        body: RequestBody
+    ) async throws -> ResponseBody {
+        let url = makeURL(path)
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(body)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200..<300).contains(httpResponse.statusCode) else {
+            throw APIError.badResponse
+        }
+
+        return try JSONDecoder().decode(ResponseBody.self, from: data)
+    }
+
     private func makeURL(_ path: String, queryItems: [URLQueryItem] = []) -> URL {
         var components = URLComponents(url: baseURL.appending(path: path), resolvingAgainstBaseURL: false)!
         if !queryItems.isEmpty {
@@ -148,7 +176,7 @@ struct APIClient {
         return components.url!
     }
 
-    private func accountQueryItems(accountId: String?, searchQuery: String? = nil) -> [URLQueryItem] {
+    private func accountQueryItems(accountId: String?, searchQuery: String? = nil, folder: MailboxFolder? = nil) -> [URLQueryItem] {
         var items: [URLQueryItem] = []
         if let accountId, !accountId.isEmpty {
             items.append(URLQueryItem(name: "accountId", value: accountId))
@@ -156,7 +184,37 @@ struct APIClient {
         if let searchQuery, !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             items.append(URLQueryItem(name: "q", value: searchQuery))
         }
+        if let folder {
+            items.append(URLQueryItem(name: "folder", value: folder.rawValue))
+        }
         return items
+    }
+}
+
+enum MailboxFolder: String, CaseIterable, Identifiable {
+    case inbox
+    case sent
+    case archive
+    case trash
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .inbox: return "Inbox"
+        case .sent: return "Sent"
+        case .archive: return "Archive"
+        case .trash: return "Trash"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .inbox: return "tray.fill"
+        case .sent: return "paperplane.fill"
+        case .archive: return "archivebox.fill"
+        case .trash: return "trash.fill"
+        }
     }
 }
 
@@ -170,6 +228,10 @@ private struct EmailsResponse: Decodable {
 
 private struct EmailResponse: Decodable {
     let email: Email
+}
+
+private struct EmailSummaryResponse: Decodable {
+    let summary: String
 }
 
 private struct AccountsResponse: Decodable {
@@ -200,6 +262,10 @@ private struct ReplyEmailRequest: Encodable {
     let subject: String
     let body: String
     let threadId: String
+}
+
+private struct AccountRequest: Encodable {
+    let accountId: String?
 }
 
 enum APIError: Error {

@@ -3,17 +3,23 @@ import { getGoogleAccountById, getLatestGoogleAccount, listGoogleAccounts } from
 import {
   archiveEmail,
   getEmail,
-  listInboxEmails,
+  listMailboxEmails,
   markEmailRead,
   markEmailUnread,
+  type MailboxFolder,
   replyToEmail,
   sendEmail,
   starEmail,
   trashEmail,
   unstarEmail
 } from "../services/gmail.service.js";
+import { summarizeEmail } from "../services/ai.service.js";
 
 export const emailRoutes = Router();
+
+function mailboxFolderFromQuery(value: unknown): MailboxFolder {
+  return value === "sent" || value === "archive" || value === "trash" ? value : "inbox";
+}
 
 async function requireSelectedAccount(request: import("express").Request, response: import("express").Response) {
   const body = request.body as { accountId?: unknown } | undefined;
@@ -38,6 +44,7 @@ emailRoutes.get("/emails", async (request, response, next) => {
   try {
     const query = typeof request.query.q === "string" ? request.query.q : undefined;
     const accountId = typeof request.query.accountId === "string" ? request.query.accountId : undefined;
+    const folder = mailboxFolderFromQuery(request.query.folder);
 
     if (accountId) {
       const account = await getGoogleAccountById(accountId);
@@ -46,7 +53,7 @@ emailRoutes.get("/emails", async (request, response, next) => {
         return;
       }
 
-      const emails = await listInboxEmails(account, { query });
+      const emails = await listMailboxEmails(account, { query, folder });
       response.json({ emails });
       return;
     }
@@ -55,7 +62,7 @@ emailRoutes.get("/emails", async (request, response, next) => {
     const emailGroups = await Promise.all(
       accounts.map(async (accountSummary) => {
         const account = await getGoogleAccountById(accountSummary.id);
-        return account ? listInboxEmails(account, { query }) : [];
+        return account ? listMailboxEmails(account, { query, folder }) : [];
       })
     );
 
@@ -65,6 +72,24 @@ emailRoutes.get("/emails", async (request, response, next) => {
       .slice(0, 50);
 
     response.json({ emails });
+  } catch (error) {
+    next(error);
+  }
+});
+
+emailRoutes.post("/emails/:id/summary", async (request, response, next) => {
+  try {
+    const account = await requireSelectedAccount(request, response);
+    if (!account) return;
+
+    const email = await getEmail(account, request.params.id);
+    const summary = await summarizeEmail({
+      subject: email.subject,
+      sender: email.sender,
+      body: email.body || email.snippet
+    });
+
+    response.json({ summary });
   } catch (error) {
     next(error);
   }

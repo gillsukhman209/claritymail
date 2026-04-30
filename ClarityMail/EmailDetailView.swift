@@ -14,6 +14,8 @@ struct EmailDetailView: View {
     @State private var isLoading = false
     @State private var isPerformingAction = false
     @State private var isShowingReply = false
+    @State private var summary: String?
+    @State private var isLoadingSummary = false
     @State private var errorMessage: String?
 
     private let apiClient = APIClient()
@@ -29,6 +31,8 @@ struct EmailDetailView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
                     headerSection
+
+                    summaryCard
 
                     if let errorMessage {
                         Text(errorMessage)
@@ -101,6 +105,7 @@ struct EmailDetailView: View {
         }
         .task(id: email.id) {
             await loadEmail()
+            await loadSummary()
         }
         .sheet(isPresented: $isShowingReply) {
             NavigationStack {
@@ -146,6 +151,41 @@ struct EmailDetailView: View {
         }
     }
 
+    private var summaryCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Theme.Palette.accentSoft)
+                Text("AI SUMMARY")
+                    .font(.system(size: 11, weight: .semibold))
+                    .tracking(1.4)
+                    .foregroundStyle(Theme.Palette.accentSoft)
+                Spacer()
+                if isLoadingSummary {
+                    ProgressView()
+                        .scaleEffect(0.75)
+                }
+            }
+
+            Text(summary ?? "Summarizing this email...")
+                .font(.system(size: 14))
+                .foregroundStyle(Theme.Palette.textSecondary)
+                .lineSpacing(2)
+                .textSelection(.enabled)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(18)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.Radius.row, style: .continuous)
+                .fill(Theme.Palette.surface.opacity(0.6))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.Radius.row, style: .continuous)
+                .strokeBorder(Theme.Palette.border, lineWidth: 1)
+        )
+    }
+
     private var initials: String {
         let name = visibleEmail.sender
         let parts = name.split(separator: " ").prefix(2)
@@ -161,6 +201,17 @@ struct EmailDetailView: View {
             errorMessage = nil
         } catch {
             errorMessage = "Could not load email body."
+        }
+    }
+
+    private func loadSummary() async {
+        isLoadingSummary = true
+        defer { isLoadingSummary = false }
+
+        do {
+            summary = try await apiClient.summarizeEmail(id: email.id, accountId: accountId)
+        } catch {
+            summary = "Summary unavailable. Check that OPENAI_API_KEY is set in the backend."
         }
     }
 

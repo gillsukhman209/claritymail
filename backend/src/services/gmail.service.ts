@@ -7,6 +7,8 @@ type GmailAccount = {
   lastHistoryId?: string | null;
 };
 
+export type MailboxFolder = "inbox" | "sent" | "archive" | "trash";
+
 function getOAuthClient(account: GmailAccount) {
   const oauth2Client = new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID,
@@ -96,14 +98,37 @@ function findBodyPart(payload: any, mimeType: string): string | null {
   return null;
 }
 
-export async function listInboxEmails(account: GmailAccount, options: { query?: string } = {}) {
+function mailboxListOptions(folder: MailboxFolder, query?: string) {
+  const trimmedQuery = query?.trim();
+
+  switch (folder) {
+    case "sent":
+      return { labelIds: ["SENT"], q: trimmedQuery || undefined };
+    case "trash":
+      return { labelIds: ["TRASH"], q: trimmedQuery || undefined };
+    case "archive":
+      return {
+        labelIds: undefined,
+        q: ["-in:inbox", "-in:sent", "-in:trash", "-in:drafts", trimmedQuery].filter(Boolean).join(" ")
+      };
+    case "inbox":
+    default:
+      return { labelIds: ["INBOX"], q: trimmedQuery || undefined };
+  }
+}
+
+export async function listMailboxEmails(
+  account: GmailAccount,
+  options: { query?: string; folder?: MailboxFolder } = {}
+) {
   const gmail = getGmailClient(account);
+  const listOptions = mailboxListOptions(options.folder ?? "inbox", options.query);
 
   const listResponse = await gmail.users.messages.list({
     userId: "me",
-    labelIds: ["INBOX"],
+    labelIds: listOptions.labelIds,
     maxResults: 30,
-    q: options.query?.trim() || undefined
+    q: listOptions.q
   });
 
   const messages = listResponse.data.messages ?? [];
