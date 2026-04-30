@@ -1,5 +1,8 @@
 import Foundation
 import UserNotifications
+#if os(iOS)
+import UIKit
+#endif
 
 extension Notification.Name {
     static let openMorningBrief = Notification.Name("openMorningBrief")
@@ -16,9 +19,28 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
 
     func requestAuthorization() async {
         do {
-            _ = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound])
+            let isAllowed = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound])
+            if isAllowed {
+                await MainActor.run {
+                    registerForRemoteNotifications()
+                }
+            }
         } catch {
             // Permission failures should not block email loading.
+        }
+    }
+
+    func registerDeviceToken(_ deviceToken: Data) async {
+        let token = deviceToken.map { String(format: "%02x", $0) }.joined()
+
+        do {
+            try await APIClient().registerDeviceToken(
+                token: token,
+                platform: "ios",
+                environment: Self.apnsEnvironment
+            )
+        } catch {
+            // Token registration will retry next app launch.
         }
     }
 
@@ -95,6 +117,23 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
                 NotificationCenter.default.post(name: .openEmailFromNotification, object: nil)
             }
         }
+    }
+}
+
+private extension NotificationManager {
+    static var apnsEnvironment: String {
+        #if DEBUG
+        return "sandbox"
+        #else
+        return "production"
+        #endif
+    }
+
+    @MainActor
+    func registerForRemoteNotifications() {
+        #if os(iOS)
+        UIApplication.shared.registerForRemoteNotifications()
+        #endif
     }
 }
 

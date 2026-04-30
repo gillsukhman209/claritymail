@@ -9,6 +9,10 @@ import SwiftUI
 
 @main
 struct ClarityMailApp: App {
+    #if os(iOS)
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    #endif
+
     init() {
         _ = NotificationManager.shared
     }

@@ -7,7 +7,10 @@ import {
   saveGmailSyncEvent,
   updateGmailWatchState
 } from "../db/accounts.repo.js";
-import { listGmailHistory, startGmailWatch } from "../services/gmail.service.js";
+import { saveDeviceToken } from "../db/deviceTokens.repo.js";
+import { listBlockedSenderEmails, filterBlockedEmails } from "../db/blockedSenders.repo.js";
+import { getEmail, listGmailHistory, startGmailWatch } from "../services/gmail.service.js";
+import { notifyDevicesForEmail } from "../services/apns.service.js";
 
 type PubSubPushBody = {
   message?: {
@@ -18,12 +21,64 @@ type PubSubPushBody = {
 
 export const realtimeRoutes = Router();
 
+const maxNotificationAgeMs = 10 * 60 * 1000;
+
 function decodePubSubData(data: string) {
   return JSON.parse(Buffer.from(data, "base64").toString("utf8")) as {
     emailAddress?: string;
     historyId?: string;
   };
 }
+
+function isFreshUnreadEmail(email: any) {
+  return !email.isRead && Date.now() - Date.parse(email.receivedAt) <= maxNotificationAgeMs;
+}
+
+async function notifyFreshInboxMessages(account: NonNullable<Awaited<ReturnType<typeof getGoogleAccountById>>>, messageIds: string[]) {
+  if (messageIds.length === 0) return;
+
+  const blockedSenders = await listBlockedSenderEmails(account.id);
+  const emails = await Promise.all(
+    messageIds.slice(0, 5).map(async (messageId) => {
+      try {
+        return await getEmail(account, messageId);
+      } catch {
+        return null;
+      }
+    })
+  );
+
+  const notifyableEmails = filterBlockedEmails(
+    emails.filter((email): email is NonNullable<typeof email> => Boolean(email)),
+    blockedSenders
+  ).filter(isFreshUnreadEmail);
+
+  await Promise.all(notifyableEmails.map((email) => notifyDevicesForEmail(email)));
+}
+
+realtimeRoutes.post("/devices/register", async (request, response, next) => {
+  try {
+    const body = request.body as {
+      token?: unknown;
+      platform?: unknown;
+      environment?: unknown;
+    };
+
+    const token = typeof body.token === "string" ? body.token.trim() : "";
+    const platform = body.platform === "macos" ? "macos" : "ios";
+    const environment = body.environment === "production" ? "production" : "sandbox";
+
+    if (!token) {
+      response.status(400).json({ error: "Missing device token." });
+      return;
+    }
+
+    const device = await saveDeviceToken({ token, platform, environment });
+    response.json({ ok: true, deviceId: device.id });
+  } catch (error) {
+    next(error);
+  }
+});
 
 realtimeRoutes.post("/gmail/watch", async (request, response, next) => {
   try {
@@ -98,6 +153,8 @@ realtimeRoutes.post("/webhook/gmail", async (request, response, next) => {
       historyId: history.historyId,
       messageIds: history.messageIds
     });
+
+    await notifyFreshInboxMessages(account, history.messageIds);
 
     response.status(204).send();
   } catch (error) {

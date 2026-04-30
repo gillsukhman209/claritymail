@@ -288,6 +288,13 @@ struct APIClient {
         try await post("/gmail/watch", queryItems: accountQueryItems(accountId: accountId))
     }
 
+    func registerDeviceToken(token: String, platform: String, environment: String) async throws {
+        try await postJSON(
+            "/devices/register",
+            body: DeviceTokenRequest(token: token, platform: platform, environment: environment)
+        )
+    }
+
     func summarizeEmail(id: Email.ID, accountId: String? = nil) async throws -> String {
         let response: EmailSummaryResponse = try await postJSONForResponse(
             "/emails/\(id)/summary",
@@ -753,6 +760,12 @@ private struct DraftEmailRequest: Encodable {
 
 private struct AccountRequest: Encodable {
     let accountId: String?
+}
+
+private struct DeviceTokenRequest: Encodable {
+    let token: String
+    let platform: String
+    let environment: String
 }
 
 enum APIError: Error {
