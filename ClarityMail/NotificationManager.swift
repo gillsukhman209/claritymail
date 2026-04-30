@@ -3,6 +3,7 @@ import UserNotifications
 
 extension Notification.Name {
     static let openMorningBrief = Notification.Name("openMorningBrief")
+    static let openEmailFromNotification = Notification.Name("openEmailFromNotification")
 }
 
 final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
@@ -27,6 +28,11 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
         content.subtitle = email.subject
         content.body = email.snippet
         content.sound = .default
+        content.userInfo = [
+            "route": "email",
+            "emailId": email.id,
+            "accountId": email.accountId ?? ""
+        ]
 
         let request = UNNotificationRequest(
             identifier: "email-\(email.accountId ?? "account")-\(email.id)",
@@ -68,14 +74,26 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
         didReceive response: UNNotificationResponse
     ) async {
         let userInfo = response.notification.request.content.userInfo
-        guard userInfo["route"] as? String == "morningBrief" else { return }
+        let route = userInfo["route"] as? String
 
-        if let briefId = userInfo["briefId"] as? String {
+        if route == "morningBrief", let briefId = userInfo["briefId"] as? String {
             UserDefaults.standard.set(briefId, forKey: "pendingMorningBriefId")
+
+            await MainActor.run {
+                NotificationCenter.default.post(name: .openMorningBrief, object: nil)
+            }
+            return
         }
 
-        await MainActor.run {
-            NotificationCenter.default.post(name: .openMorningBrief, object: nil)
+        if route == "email", let emailId = userInfo["emailId"] as? String {
+            UserDefaults.standard.set(emailId, forKey: "pendingNotificationEmailId")
+            if let accountId = userInfo["accountId"] as? String, !accountId.isEmpty {
+                UserDefaults.standard.set(accountId, forKey: "pendingNotificationAccountId")
+            }
+
+            await MainActor.run {
+                NotificationCenter.default.post(name: .openEmailFromNotification, object: nil)
+            }
         }
     }
 }

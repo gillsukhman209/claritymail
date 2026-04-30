@@ -176,6 +176,25 @@ export async function enrichEmailsWithPriority<T extends EmailLike>(
   return enriched;
 }
 
+export function applyImportantSenderPriority<T extends EmailLike>(
+  emails: T[],
+  importantSenderEmails: Set<string>
+): T[] {
+  return emails.map((email) => {
+    const senderEmail = normalizeEmailAddress(email.sender);
+    if (!importantSenderEmails.has(senderEmail)) {
+      return email;
+    }
+
+    return {
+      ...email,
+      priorityStatus: "important",
+      prioritySource: "manual_sender",
+      priorityReason: "Important sender"
+    };
+  });
+}
+
 export function sortPriorityEmails<T extends EmailLike & { priorityStatus?: string; prioritySource?: string }>(emails: T[]) {
   return emails.sort((left, right) => {
     const leftScore = priorityScore(left);

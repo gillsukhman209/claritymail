@@ -12,7 +12,7 @@ struct MailboxView: View {
     @Environment(\.openURL) private var openURL
 
     @State private var selectedEmail: Email?
-    @State private var emails = Email.previewEmails
+    @State private var emails: [Email] = []
     @State private var accounts: [GmailAccount] = []
     @State private var selectedAccountId: String?
     @State private var selectedFolder: MailboxFolder = .inbox
@@ -36,6 +36,7 @@ struct MailboxView: View {
     @State private var isPerformingBulkAction = false
     @State private var hasLoadedInitialEmails = false
     @State private var recipientSuggestions: [EmailContact] = []
+    @State private var mailboxRequestID = UUID()
 
     private let apiClient = APIClient()
 
@@ -200,33 +201,28 @@ struct MailboxView: View {
                 startAutoRefresh()
                 startMorningBriefPolling()
                 openPendingMorningBriefIfNeeded()
+                openPendingNotificationEmailIfNeeded()
             }
             .onChange(of: selectedAccountId) {
-                selectedEmail = nil
-                knownEmailIds.removeAll()
-                hasLoadedInitialEmails = false
-                nextPageToken = nil
+                resetMailboxState()
+                let requestID = mailboxRequestID
                 Task {
-                    await loadEmails()
+                    await loadEmails(requestID: requestID)
                     await startRealtimeSync()
                 }
             }
             .onChange(of: selectedFolder) {
-                selectedEmail = nil
-                knownEmailIds.removeAll()
-                hasLoadedInitialEmails = false
-                nextPageToken = nil
+                resetMailboxState()
+                let requestID = mailboxRequestID
                 Task {
-                    await loadEmails()
+                    await loadEmails(requestID: requestID)
                 }
             }
             .onChange(of: isPriorityMode) {
-                selectedEmail = nil
-                knownEmailIds.removeAll()
-                hasLoadedInitialEmails = false
-                nextPageToken = nil
+                resetMailboxState()
+                let requestID = mailboxRequestID
                 Task {
-                    await loadEmails()
+                    await loadEmails(requestID: requestID)
                 }
             }
             .onChange(of: searchText) {
@@ -234,8 +230,9 @@ struct MailboxView: View {
                 searchTask = Task {
                     try? await Task.sleep(for: .milliseconds(350))
                     if Task.isCancelled { return }
-                    nextPageToken = nil
-                    await loadEmails()
+                    resetMailboxState(clearEmails: false)
+                    let requestID = mailboxRequestID
+                    await loadEmails(requestID: requestID)
                 }
             }
             .onChange(of: session.pendingAuthURL) {
@@ -245,6 +242,9 @@ struct MailboxView: View {
             .onReceive(NotificationCenter.default.publisher(for: .openMorningBrief)) { _ in
                 isShowingMorningBrief = true
                 UserDefaults.standard.removeObject(forKey: "pendingMorningBriefId")
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .openEmailFromNotification)) { _ in
+                openPendingNotificationEmailIfNeeded()
             }
             .onDisappear {
                 autoRefreshTask?.cancel()
@@ -275,6 +275,19 @@ struct MailboxView: View {
 
     private var unreadCount: Int { emails.filter { !$0.isRead }.count }
 
+    private func resetMailboxState(clearEmails: Bool = true) {
+        mailboxRequestID = UUID()
+        selectedEmail = nil
+        knownEmailIds.removeAll()
+        selectedEmailIds.removeAll()
+        isSelectionMode = false
+        hasLoadedInitialEmails = false
+        nextPageToken = nil
+        if clearEmails {
+            emails = []
+        }
+    }
+
     private func loadAccounts() async {
         do {
             accounts = try await apiClient.accounts()
@@ -288,9 +301,14 @@ struct MailboxView: View {
         }
     }
 
-    private func loadEmails(notifyForNewEmails: Bool = true) async {
+    private func loadEmails(notifyForNewEmails: Bool = true, requestID: UUID? = nil) async {
+        let activeRequestID = requestID ?? mailboxRequestID
         isLoading = true
-        defer { isLoading = false }
+        defer {
+            if activeRequestID == mailboxRequestID {
+                isLoading = false
+            }
+        }
 
         do {
             let page = try await apiClient.emails(
@@ -300,12 +318,18 @@ struct MailboxView: View {
                 priorityOnly: isPriorityMode
             )
             let fetchedEmails = page.emails
+            guard activeRequestID == mailboxRequestID else { return }
             let fetchedIds = Set(fetchedEmails.map(\.id))
             mergeRecipientSuggestions(from: fetchedEmails)
 
             if shouldNotifyForNewEmails(notifyForNewEmails: notifyForNewEmails) {
+                let watermark = notificationWatermark()
                 let newEmails = fetchedEmails
                     .filter { !knownEmailIds.contains($0.id) }
+                    .filter { email in
+                        guard let watermark else { return false }
+                        return email.receivedAt > watermark
+                    }
                     .prefix(3)
 
                 for email in newEmails {
@@ -316,19 +340,27 @@ struct MailboxView: View {
             emails = fetchedEmails
             nextPageToken = page.nextPageToken
             knownEmailIds = fetchedIds
+            updateNotificationWatermark(with: fetchedEmails)
             selectedEmailIds.removeAll()
             isSelectionMode = false
             hasLoadedInitialEmails = true
             errorMessage = nil
         } catch {
-            errorMessage = "Could not load inbox."
+            if activeRequestID == mailboxRequestID {
+                errorMessage = "Could not load inbox."
+            }
         }
     }
 
     private func loadMoreEmails() async {
         guard let nextPageToken, !isLoadingMore, !isLoading else { return }
+        let activeRequestID = mailboxRequestID
         isLoadingMore = true
-        defer { isLoadingMore = false }
+        defer {
+            if activeRequestID == mailboxRequestID {
+                isLoadingMore = false
+            }
+        }
 
         do {
             let page = try await apiClient.emails(
@@ -338,6 +370,7 @@ struct MailboxView: View {
                 pageToken: nextPageToken,
                 priorityOnly: isPriorityMode
             )
+            guard activeRequestID == mailboxRequestID else { return }
             mergeRecipientSuggestions(from: page.emails)
             emails.append(contentsOf: page.emails.filter { newEmail in
                 !emails.contains(where: { $0.id == newEmail.id })
@@ -355,6 +388,27 @@ struct MailboxView: View {
         hasLoadedInitialEmails &&
         selectedFolder == .inbox &&
         searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var notificationWatermarkKey: String {
+        "lastInboxNotificationWatermark-\(selectedAccountId ?? "all")"
+    }
+
+    private func notificationWatermark() -> Date? {
+        let timestamp = UserDefaults.standard.double(forKey: notificationWatermarkKey)
+        return timestamp > 0 ? Date(timeIntervalSince1970: timestamp) : nil
+    }
+
+    private func updateNotificationWatermark(with loadedEmails: [Email]) {
+        guard selectedFolder == .inbox,
+              searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let newest = loadedEmails.map(\.receivedAt).max()
+        else { return }
+
+        let current = notificationWatermark()
+        if current == nil || newest > current! {
+            UserDefaults.standard.set(newest.timeIntervalSince1970, forKey: notificationWatermarkKey)
+        }
     }
 
     private func mergeRecipientSuggestions(from emails: [Email]) {
@@ -492,6 +546,12 @@ struct MailboxView: View {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(20))
                 if Task.isCancelled { return }
+                guard selectedFolder == .inbox,
+                      searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                      !isLoading,
+                      !isLoadingMore,
+                      !isSelectionMode
+                else { continue }
                 await loadEmails()
             }
         }
@@ -544,6 +604,39 @@ struct MailboxView: View {
         if UserDefaults.standard.string(forKey: "pendingMorningBriefId") != nil {
             isShowingMorningBrief = true
             UserDefaults.standard.removeObject(forKey: "pendingMorningBriefId")
+        }
+    }
+
+    private func openPendingNotificationEmailIfNeeded() {
+        guard let emailId = UserDefaults.standard.string(forKey: "pendingNotificationEmailId") else { return }
+        let accountId = UserDefaults.standard.string(forKey: "pendingNotificationAccountId")
+
+        UserDefaults.standard.removeObject(forKey: "pendingNotificationEmailId")
+        UserDefaults.standard.removeObject(forKey: "pendingNotificationAccountId")
+
+        Task {
+            await openEmailFromNotification(emailId: emailId, accountId: accountId)
+        }
+    }
+
+    private func openEmailFromNotification(emailId: String, accountId: String?) async {
+        do {
+            if let accountId, !accountId.isEmpty {
+                selectedAccountId = accountId
+            }
+            if selectedFolder != .inbox {
+                selectedFolder = .inbox
+            }
+
+            let email = try await apiClient.email(id: emailId, accountId: accountId)
+            selectedEmail = email
+
+            if !emails.contains(where: { $0.id == email.id }) {
+                emails.insert(email, at: 0)
+                emails.sort { $0.receivedAt > $1.receivedAt }
+            }
+        } catch {
+            errorMessage = "Could not open that email."
         }
     }
 }

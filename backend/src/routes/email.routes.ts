@@ -37,7 +37,12 @@ import {
   unstarEmail
 } from "../services/gmail.service.js";
 import { summarizeEmail } from "../services/ai.service.js";
-import { enrichEmailsWithPriority, senderDisplayName, sortPriorityEmails } from "../services/priority.service.js";
+import {
+  applyImportantSenderPriority,
+  enrichEmailsWithPriority,
+  senderDisplayName,
+  sortPriorityEmails
+} from "../services/priority.service.js";
 
 export const emailRoutes = Router();
 
@@ -119,11 +124,10 @@ emailRoutes.get("/emails", async (request, response, next) => {
 
       const result = await listMailboxEmails(account, { query, folder, pageToken: pageState[accountId] });
       const blockedFilteredEmails = filterBlockedEmails(result.emails, await listBlockedSenderEmails(account.id ?? accountId));
-      const emailsWithPriority = await enrichEmailsWithPriority(
-        account.id ?? accountId,
-        blockedFilteredEmails,
-        await listImportantSenderEmails(account.id ?? accountId)
-      );
+      const importantSenderEmails = await listImportantSenderEmails(account.id ?? accountId);
+      const emailsWithPriority = priorityOnly
+        ? await enrichEmailsWithPriority(account.id ?? accountId, blockedFilteredEmails, importantSenderEmails)
+        : applyImportantSenderPriority(blockedFilteredEmails, importantSenderEmails);
       const emails = priorityOnly
         ? sortPriorityEmails(emailsWithPriority.filter((email: any) => email.priorityStatus === "important"))
         : sortNewestFirst(emailsWithPriority);
@@ -148,11 +152,10 @@ emailRoutes.get("/emails", async (request, response, next) => {
           result.emails,
           await listBlockedSenderEmails(account.id ?? accountSummary.id)
         );
-        const emailsWithPriority = await enrichEmailsWithPriority(
-          account.id ?? accountSummary.id,
-          blockedFilteredEmails,
-          await listImportantSenderEmails(account.id ?? accountSummary.id)
-        );
+        const importantSenderEmails = await listImportantSenderEmails(account.id ?? accountSummary.id);
+        const emailsWithPriority = priorityOnly
+          ? await enrichEmailsWithPriority(account.id ?? accountSummary.id, blockedFilteredEmails, importantSenderEmails)
+          : applyImportantSenderPriority(blockedFilteredEmails, importantSenderEmails);
 
         return {
           emails: priorityOnly
