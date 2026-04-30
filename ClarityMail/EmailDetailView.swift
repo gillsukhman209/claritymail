@@ -121,20 +121,7 @@ struct EmailDetailView: View {
                 .foregroundStyle(Theme.Palette.textPrimary)
 
             HStack(spacing: 10) {
-                Circle()
-                    .fill(
-                        LinearGradient(
-                            colors: [Theme.Palette.accent.opacity(0.85), Theme.Palette.accent.opacity(0.55)],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-                    .frame(width: 32, height: 32)
-                    .overlay(
-                        Text(initials)
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(.white)
-                    )
+                SenderLogoView(email: visibleEmail, size: 36)
 
                 VStack(alignment: .leading, spacing: 1) {
                     Text(visibleEmail.sender)
@@ -183,12 +170,6 @@ struct EmailDetailView: View {
             RoundedRectangle(cornerRadius: Theme.Radius.row, style: .continuous)
                 .strokeBorder(Theme.Palette.border, lineWidth: 1)
         )
-    }
-
-    private var initials: String {
-        let name = visibleEmail.sender
-        let parts = name.split(separator: " ").prefix(2)
-        return parts.compactMap { $0.first.map(String.init) }.joined().uppercased()
     }
 
     private func loadEmail() async {

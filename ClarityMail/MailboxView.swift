@@ -410,7 +410,7 @@ private struct EmailRowView: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 14) {
-            AvatarView(name: email.displayName)
+            SenderLogoView(email: email, size: 38)
 
             VStack(alignment: .leading, spacing: 4) {
                 HStack(alignment: .firstTextBaseline) {
@@ -468,16 +468,19 @@ private struct EmailRowView: View {
     }
 }
 
-private struct AvatarView: View {
-    let name: String
+struct SenderLogoView: View {
+    let email: Email
+    let size: CGFloat
+    @State private var logoImage: PlatformImage?
+    @State private var isLoadingLogo = false
 
     private var initials: String {
-        let parts = name.split(separator: " ").prefix(2)
+        let parts = email.displayName.split(separator: " ").prefix(2)
         return parts.compactMap { $0.first.map(String.init) }.joined().uppercased()
     }
 
     private var seedColor: Color {
-        let hash = abs(name.hashValue)
+        let hash = abs(email.displayName.hashValue)
         let palette: [Color] = [
             Color(red: 0.078, green: 0.580, blue: 0.541), // teal
             Color(red: 0.180, green: 0.420, blue: 0.580), // ocean
@@ -489,6 +492,27 @@ private struct AvatarView: View {
     }
 
     var body: some View {
+        Group {
+            if let logoImage {
+                Image(platformImage: logoImage)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                fallback
+            }
+        }
+        .frame(width: size, height: size)
+        .clipShape(Circle())
+        .overlay(
+            Circle()
+                .strokeBorder(Theme.Palette.border, lineWidth: 1)
+        )
+        .task(id: email.senderEmailAddress) {
+            await loadLogoIfNeeded()
+        }
+    }
+
+    private var fallback: some View {
         Circle()
             .fill(
                 LinearGradient(
@@ -497,14 +521,60 @@ private struct AvatarView: View {
                     endPoint: .bottomTrailing
                 )
             )
-            .frame(width: 38, height: 38)
             .overlay(
                 Text(initials)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: max(11, size * 0.34), weight: .semibold))
                     .foregroundStyle(.white)
             )
     }
+
+    private func loadLogoIfNeeded() async {
+        guard logoImage == nil, !isLoadingLogo else { return }
+        isLoadingLogo = true
+        defer { isLoadingLogo = false }
+
+        for url in email.senderLogoURLs {
+            do {
+                var request = URLRequest(url: url)
+                request.timeoutInterval = 4
+                request.cachePolicy = .returnCacheDataElseLoad
+
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let httpResponse = response as? HTTPURLResponse,
+                      (200..<300).contains(httpResponse.statusCode),
+                      data.count > 100,
+                      let image = PlatformImage(data: data) else {
+                    continue
+                }
+
+                logoImage = image
+                return
+            } catch {
+                continue
+            }
+        }
+    }
 }
+
+#if os(macOS)
+import AppKit
+typealias PlatformImage = NSImage
+
+private extension Image {
+    init(platformImage: PlatformImage) {
+        self.init(nsImage: platformImage)
+    }
+}
+#else
+import UIKit
+typealias PlatformImage = UIImage
+
+private extension Image {
+    init(platformImage: PlatformImage) {
+        self.init(uiImage: platformImage)
+    }
+}
+#endif
 
 // MARK: - Bottom Action Bar
 
