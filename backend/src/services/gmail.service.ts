@@ -55,6 +55,10 @@ function decodeBase64Url(value: string) {
   return Buffer.from(normalized, "base64").toString("utf8");
 }
 
+function base64UrlToBase64(value: string) {
+  return Buffer.from(value.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("base64");
+}
+
 function encodeBase64Url(value: string | Buffer) {
   return Buffer.from(value)
     .toString("base64")
@@ -134,17 +138,51 @@ function buildRawEmail(input: SendInput) {
   return encodeBase64Url(lines.join("\r\n"));
 }
 
+const htmlEntities: Record<string, string> = {
+  amp: "&",
+  apos: "'",
+  gt: ">",
+  lt: "<",
+  nbsp: " ",
+  quot: "\""
+};
+
+function decodeHtmlEntities(value: string) {
+  return value.replace(/&(#x?[0-9a-f]+|[a-z]+);/gi, (match, entity: string) => {
+    const normalized = entity.toLowerCase();
+
+    if (normalized.startsWith("#x")) {
+      const codePoint = Number.parseInt(normalized.slice(2), 16);
+      return Number.isFinite(codePoint) ? String.fromCodePoint(codePoint) : match;
+    }
+
+    if (normalized.startsWith("#")) {
+      const codePoint = Number.parseInt(normalized.slice(1), 10);
+      return Number.isFinite(codePoint) ? String.fromCodePoint(codePoint) : match;
+    }
+
+    return htmlEntities[normalized] ?? match;
+  });
+}
+
+function cleanText(value: string) {
+  return decodeHtmlEntities(value).replace(/\s+/g, " ").trim();
+}
+
 function stripHtml(value: string) {
-  return value
+  return cleanText(
+    value
     .replace(/<style[\s\S]*?<\/style>/gi, " ")
     .replace(/<script[\s\S]*?<\/script>/gi, " ")
     .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&#39;/g, "'")
-    .replace(/&quot;/g, "\"")
-    .replace(/\s+/g, " ")
-    .trim();
+  );
+}
+
+function normalizeEmailHtml(value: string) {
+  return value.replace(
+    /(<img\b[^>]*?\bsrc=["'])http:\/\//gi,
+    "$1https://"
+  );
 }
 
 function findBodyPart(payload: any, mimeType: string): string | null {
@@ -186,6 +224,85 @@ function findAttachments(payload: any): Array<{ id: string; filename: string; mi
   return current.concat((payload.parts ?? []).flatMap((part: any) => findAttachments(part)));
 }
 
+type InlineImagePart = {
+  contentId: string;
+  contentLocation: string;
+  attachmentId: string | null;
+  data: string | null;
+  mimeType: string;
+};
+
+function normalizeContentId(value: string) {
+  return value.trim().replace(/^</, "").replace(/>$/, "");
+}
+
+function findInlineImageParts(payload: any): InlineImagePart[] {
+  if (!payload) {
+    return [];
+  }
+
+  const headers = payload.headers ?? [];
+  const contentId = normalizeContentId(headerValue(headers, "Content-ID"));
+  const contentLocation = headerValue(headers, "Content-Location").trim();
+  const mimeType = String(payload.mimeType ?? "");
+  const isInlineImage = mimeType.startsWith("image/") && (contentId || contentLocation);
+
+  const current: InlineImagePart[] = isInlineImage
+    ? [
+        {
+          contentId,
+          contentLocation,
+          attachmentId: payload.body?.attachmentId ?? null,
+          data: payload.body?.data ?? null,
+          mimeType
+        }
+      ]
+    : [];
+
+  return current.concat((payload.parts ?? []).flatMap((part: any) => findInlineImageParts(part)));
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+async function hydrateInlineImages(account: GmailAccount, messageId: string, html: string | null, payload: any) {
+  if (!html || !html.includes("cid:")) {
+    return html;
+  }
+
+  const gmail = getGmailClient(account);
+  let hydratedHtml = html;
+  const inlineImages = findInlineImageParts(payload);
+
+  for (const image of inlineImages) {
+    const key = image.contentId || image.contentLocation;
+    if (!key) continue;
+
+    let base64Data = image.data ? base64UrlToBase64(image.data) : null;
+    if (!base64Data && image.attachmentId) {
+      const attachment = await gmail.users.messages.attachments.get({
+        userId: "me",
+        messageId,
+        id: image.attachmentId
+      });
+      if (attachment.data.data) {
+        base64Data = base64UrlToBase64(attachment.data.data);
+      }
+    }
+
+    if (!base64Data) continue;
+
+    const dataUrl = `data:${image.mimeType};base64,${base64Data}`;
+    const cidValues = [key, encodeURIComponent(key)].filter(Boolean);
+    for (const cidValue of cidValues) {
+      hydratedHtml = hydratedHtml.replace(new RegExp(`cid:${escapeRegExp(cidValue)}`, "g"), dataUrl);
+    }
+  }
+
+  return hydratedHtml;
+}
+
 function parseEmailFromMessage(account: GmailAccount, data: any) {
   const headers = data.payload?.headers;
   const labelIds = data.labelIds ?? [];
@@ -194,9 +311,9 @@ function parseEmailFromMessage(account: GmailAccount, data: any) {
     accountEmail: account.email ?? "",
     id: data.id ?? "",
     threadId: data.threadId ?? "",
-    subject: headerValue(headers, "Subject") || "(No subject)",
-    sender: headerValue(headers, "From") || headerValue(headers, "To") || "Unknown sender",
-    snippet: data.snippet ?? "",
+    subject: cleanText(headerValue(headers, "Subject") || "(No subject)"),
+    sender: cleanText(headerValue(headers, "From") || headerValue(headers, "To") || "Unknown sender"),
+    snippet: cleanText(data.snippet ?? ""),
     receivedAt: new Date(Number(data.internalDate ?? Date.now())).toISOString(),
     isRead: !labelIds.includes("UNREAD"),
     isStarred: labelIds.includes("STARRED")
@@ -208,7 +325,7 @@ function parseFullEmailFromMessage(account: GmailAccount, data: any, draftId?: s
   const labelIds = data.labelIds ?? [];
   const plainText = findBodyPart(data.payload, "text/plain");
   const html = findBodyPart(data.payload, "text/html");
-  const body = plainText?.trim() || (html ? stripHtml(html) : data.snippet ?? "");
+  const body = plainText ? cleanText(plainText) : html ? stripHtml(html) : cleanText(data.snippet ?? "");
   const attachments = findAttachments(data.payload);
 
   return {
@@ -217,17 +334,25 @@ function parseFullEmailFromMessage(account: GmailAccount, data: any, draftId?: s
     id: data.id ?? "",
     draftId: draftId ?? null,
     threadId: data.threadId ?? "",
-    subject: headerValue(headers, "Subject") || "(No subject)",
-    sender: headerValue(headers, "From") || headerValue(headers, "To") || "Unknown sender",
-    to: headerValue(headers, "To") || "",
-    snippet: data.snippet ?? "",
+    subject: cleanText(headerValue(headers, "Subject") || "(No subject)"),
+    sender: cleanText(headerValue(headers, "From") || headerValue(headers, "To") || "Unknown sender"),
+    to: cleanText(headerValue(headers, "To") || ""),
+    snippet: cleanText(data.snippet ?? ""),
     receivedAt: new Date(Number(data.internalDate ?? Date.now())).toISOString(),
     isRead: !labelIds.includes("UNREAD"),
     isStarred: labelIds.includes("STARRED"),
     body,
-    htmlBody: html?.trim() || null,
+    htmlBody: html ? normalizeEmailHtml(html.trim()) : null,
     attachments
   };
+}
+
+async function parseHydratedFullEmailFromMessage(account: GmailAccount, data: any, draftId?: string) {
+  const email = parseFullEmailFromMessage(account, data, draftId);
+  if (email.htmlBody) {
+    email.htmlBody = await hydrateInlineImages(account, email.id, email.htmlBody, data.payload);
+  }
+  return email;
 }
 
 function gmailDateQueryValue(date: Date) {
@@ -281,7 +406,7 @@ export async function listMailboxEmails(
           format: "full"
         });
 
-        return parseFullEmailFromMessage(account, draftResponse.data.message, draft.id ?? "");
+        return parseHydratedFullEmailFromMessage(account, draftResponse.data.message, draft.id ?? "");
       })
     );
 
@@ -350,7 +475,7 @@ export async function getEmail(account: GmailAccount, id: string) {
     format: "full"
   });
 
-  return parseFullEmailFromMessage(account, messageResponse.data);
+  return parseHydratedFullEmailFromMessage(account, messageResponse.data);
 }
 
 export async function getThread(account: GmailAccount, threadId: string) {
@@ -361,9 +486,8 @@ export async function getThread(account: GmailAccount, threadId: string) {
     format: "full"
   });
 
-  return (result.data.messages ?? [])
-    .map((message) => parseFullEmailFromMessage(account, message))
-    .sort((left, right) => Date.parse(left.receivedAt) - Date.parse(right.receivedAt));
+  const emails = await Promise.all(result.data.messages?.map((message) => parseHydratedFullEmailFromMessage(account, message)) ?? []);
+  return emails.sort((left, right) => Date.parse(left.receivedAt) - Date.parse(right.receivedAt));
 }
 
 export async function listEmailsInWindow(
@@ -391,7 +515,7 @@ export async function listEmailsInWindow(
         format: "full"
       });
 
-      return parseFullEmailFromMessage(account, messageResponse.data);
+      return parseHydratedFullEmailFromMessage(account, messageResponse.data);
     })
   );
 
