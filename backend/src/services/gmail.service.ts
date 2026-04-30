@@ -230,6 +230,13 @@ function parseFullEmailFromMessage(account: GmailAccount, data: any, draftId?: s
   };
 }
 
+function gmailDateQueryValue(date: Date) {
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(date.getUTCDate()).padStart(2, "0");
+  return `${year}/${month}/${day}`;
+}
+
 function mailboxListOptions(folder: MailboxFolder, query?: string) {
   const trimmedQuery = query?.trim();
 
@@ -346,6 +353,49 @@ export async function getThread(account: GmailAccount, threadId: string) {
     .map((message) => parseFullEmailFromMessage(account, message))
     .sort((left, right) => Date.parse(left.receivedAt) - Date.parse(right.receivedAt));
 }
+
+export async function listEmailsInWindow(
+  account: GmailAccount,
+  windowStart: Date,
+  windowEnd: Date,
+  options: { unreadOnly?: boolean } = {}
+) {
+  const gmail = getGmailClient(account);
+  const unreadFilter = options.unreadOnly === false ? "" : "is:unread ";
+  const result = await gmail.users.messages.list({
+    userId: "me",
+    maxResults: 80,
+    q: `${unreadFilter}after:${gmailDateQueryValue(windowStart)} before:${gmailDateQueryValue(
+      new Date(windowEnd.getTime() + 24 * 60 * 60 * 1000)
+    )}`
+  });
+
+  const messages = result.data.messages ?? [];
+  const emails = await Promise.all(
+    messages.map(async (message) => {
+      const messageResponse = await gmail.users.messages.get({
+        userId: "me",
+        id: message.id ?? "",
+        format: "full"
+      });
+
+      return parseFullEmailFromMessage(account, messageResponse.data);
+    })
+  );
+
+  return emails
+    .filter((email) => {
+      const receivedAt = Date.parse(email.receivedAt);
+      return (
+        receivedAt >= windowStart.getTime() &&
+        receivedAt <= windowEnd.getTime() &&
+        (options.unreadOnly === false || !email.isRead)
+      );
+    })
+    .sort((left, right) => Date.parse(right.receivedAt) - Date.parse(left.receivedAt));
+}
+
+export const listUnreadEmailsInWindow = listEmailsInWindow;
 
 export async function getEmailAttachment(account: GmailAccount, messageId: string, attachmentId: string) {
   const gmail = getGmailClient(account);

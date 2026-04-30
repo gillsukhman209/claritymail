@@ -22,10 +22,12 @@ struct MailboxView: View {
     @State private var isShowingComposer = false
     @State private var isShowingBlockedSenders = false
     @State private var isShowingSettings = false
+    @State private var isShowingMorningBrief = false
     @State private var draftToEdit: Email?
     @State private var nextPageToken: String?
     @State private var isLoadingMore = false
     @State private var autoRefreshTask: Task<Void, Never>?
+    @State private var morningBriefTask: Task<Void, Never>?
     @State private var searchTask: Task<Void, Never>?
     @State private var knownEmailIds = Set<String>()
     @State private var hasLoadedInitialEmails = false
@@ -160,6 +162,8 @@ struct MailboxView: View {
                 await loadEmails()
                 await startRealtimeSync()
                 startAutoRefresh()
+                startMorningBriefPolling()
+                openPendingMorningBriefIfNeeded()
             }
             .onChange(of: selectedAccountId) {
                 selectedEmail = nil
@@ -193,8 +197,13 @@ struct MailboxView: View {
                 guard let url = session.pendingAuthURL else { return }
                 openURL(url)
             }
+            .onReceive(NotificationCenter.default.publisher(for: .openMorningBrief)) { _ in
+                isShowingMorningBrief = true
+                UserDefaults.standard.removeObject(forKey: "pendingMorningBriefId")
+            }
             .onDisappear {
                 autoRefreshTask?.cancel()
+                morningBriefTask?.cancel()
                 searchTask?.cancel()
             }
             .sheet(isPresented: $isShowingBlockedSenders) {
@@ -207,6 +216,9 @@ struct MailboxView: View {
                         await loadEmails()
                     }
                 }
+            }
+            .sheet(isPresented: $isShowingMorningBrief) {
+                MorningBriefDetailView()
             }
             .refreshable {
                 nextPageToken = nil
@@ -306,6 +318,342 @@ struct MailboxView: View {
                 await loadEmails()
             }
         }
+    }
+
+    private func startMorningBriefPolling() {
+        morningBriefTask?.cancel()
+        morningBriefTask = Task {
+            while !Task.isCancelled {
+                await runMorningBriefIfDue()
+                try? await Task.sleep(for: .seconds(30))
+            }
+        }
+    }
+
+    private func runMorningBriefIfDue() async {
+        do {
+            let settings = try await apiClient.morningBriefSettings()
+            guard settings.enabled else { return }
+
+            let now = Date()
+            let currentTime = Self.timeString(from: now)
+            guard currentTime == settings.briefTime else { return }
+
+            let runKey = "\(Self.dayString(from: now))-\(settings.briefTime)"
+            guard UserDefaults.standard.string(forKey: "morningBriefLastRunKey") != runKey else { return }
+
+            let result = try await apiClient.runMorningBrief()
+            UserDefaults.standard.set(runKey, forKey: "morningBriefLastRunKey")
+
+            if result.shouldNotify {
+                await NotificationManager.shared.notifyMorningBrief(result.brief)
+            }
+        } catch {
+            // Morning Brief should not block normal inbox usage.
+        }
+    }
+
+    private static func timeString(from date: Date) -> String {
+        let components = Calendar.current.dateComponents([.hour, .minute], from: date)
+        return String(format: "%02d:%02d", components.hour ?? 0, components.minute ?? 0)
+    }
+
+    private static func dayString(from date: Date) -> String {
+        let components = Calendar.current.dateComponents([.year, .month, .day], from: date)
+        return String(format: "%04d-%02d-%02d", components.year ?? 0, components.month ?? 0, components.day ?? 0)
+    }
+
+    private func openPendingMorningBriefIfNeeded() {
+        if UserDefaults.standard.string(forKey: "pendingMorningBriefId") != nil {
+            isShowingMorningBrief = true
+            UserDefaults.standard.removeObject(forKey: "pendingMorningBriefId")
+        }
+    }
+}
+
+private struct MorningBriefDetailView: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var brief: MorningBrief?
+    @State private var isLoading = true
+    @State private var errorMessage: String?
+
+    private let apiClient = APIClient()
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+
+            content
+        }
+        .frame(minWidth: 640, minHeight: 620)
+        .background(Theme.Palette.background)
+        .task {
+            await loadBrief()
+        }
+    }
+
+    private var header: some View {
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Morning Brief")
+                    .font(.system(size: 28, weight: .semibold))
+                    .foregroundStyle(Theme.Palette.textPrimary)
+
+                if let brief {
+                    Text(brief.windowText)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(Theme.Palette.textSecondary)
+                } else {
+                    Text("Unread emails from your overnight window")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(Theme.Palette.textSecondary)
+                }
+            }
+
+            Spacer()
+
+            Button {
+                dismiss()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Theme.Palette.textSecondary)
+                    .frame(width: 36, height: 36)
+                    .background(Circle().fill(Theme.Palette.surfaceElevated.opacity(0.7)))
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 28)
+        .padding(.top, 24)
+        .padding(.bottom, 18)
+        .background(Theme.Palette.surface.opacity(0.72))
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if isLoading {
+            ProgressView()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if let errorMessage {
+            Text(errorMessage)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(Theme.Palette.warm)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if let brief {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    MorningBriefStats(brief: brief)
+
+                    MorningBriefDetailGroup(
+                        title: "Needs Attention",
+                        subtitle: "Real things worth dealing with first.",
+                        systemImage: "target",
+                        accent: Theme.Palette.warm,
+                        items: brief.summary.important + brief.summary.needsAction + brief.summary.deadlines
+                    )
+                    MorningBriefDetailGroup(
+                        title: "FYI",
+                        subtitle: "Useful, but not urgent.",
+                        systemImage: "info.circle",
+                        accent: Theme.Palette.accentSoft,
+                        items: brief.summary.fyi
+                    )
+
+                    if brief.summary.important.isEmpty,
+                       brief.summary.needsAction.isEmpty,
+                       brief.summary.deadlines.isEmpty,
+                       brief.summary.fyi.isEmpty {
+                        EmptyMorningBriefState(ignoredCount: brief.ignoredCount)
+                    }
+                }
+                .padding(28)
+            }
+        } else {
+            Text("No Morning Brief yet.")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(Theme.Palette.textSecondary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    private func loadBrief() async {
+        isLoading = true
+        defer { isLoading = false }
+
+        do {
+            brief = try await apiClient.latestMorningBrief()
+            errorMessage = nil
+        } catch {
+            errorMessage = "Could not load Morning Brief."
+        }
+    }
+}
+
+private struct MorningBriefStats: View {
+    let brief: MorningBrief
+
+    var body: some View {
+        HStack(spacing: 10) {
+            MorningBriefStatPill(title: "Scanned", value: "\(brief.totalUnread)", color: Theme.Palette.textSecondary)
+            MorningBriefStatPill(title: "Needs attention", value: "\(brief.actionableCount)", color: Theme.Palette.warm)
+            MorningBriefStatPill(title: "FYI", value: "\(brief.summary.fyi.count)", color: Theme.Palette.accentSoft)
+            MorningBriefStatPill(title: "Ignored", value: "\(brief.ignoredCount)", color: Theme.Palette.textTertiary)
+        }
+    }
+}
+
+private struct MorningBriefStatPill: View {
+    let title: String
+    let value: String
+    let color: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(value)
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(color)
+            Text(title)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Theme.Palette.textTertiary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous)
+                .fill(Theme.Palette.surface.opacity(0.62))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous)
+                .strokeBorder(Theme.Palette.border, lineWidth: 1)
+        )
+    }
+}
+
+private struct MorningBriefDetailGroup: View {
+    let title: String
+    let subtitle: String
+    let systemImage: String
+    let accent: Color
+    let items: [MorningBriefItem]
+
+    var body: some View {
+        if !items.isEmpty {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .top, spacing: 11) {
+                    Image(systemName: systemImage)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(accent)
+                        .frame(width: 30, height: 30)
+                        .background(Circle().fill(accent.opacity(0.12)))
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(title)
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundStyle(Theme.Palette.textPrimary)
+                        Text(subtitle)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(Theme.Palette.textTertiary)
+                    }
+
+                    Spacer()
+
+                    Text("\(items.count)")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(accent)
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 5)
+                        .background(Capsule().fill(accent.opacity(0.12)))
+                }
+
+                VStack(spacing: 8) {
+                    ForEach(items) { item in
+                        MorningBriefItemRow(item: item, accent: accent)
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct MorningBriefItemRow: View {
+    let item: MorningBriefItem
+    let accent: Color
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Circle()
+                .fill(accent)
+                .frame(width: 7, height: 7)
+                .padding(.top, 7)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text(item.subject.cleanedBriefSubject)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Theme.Palette.textPrimary)
+                    .lineLimit(2)
+
+                Text(item.summary)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(Theme.Palette.textSecondary)
+                    .lineLimit(3)
+
+                if let action = item.action, !action.isEmpty, action.lowercased() != "none" {
+                    HStack(spacing: 6) {
+                        Image(systemName: "arrow.turn.down.right")
+                            .font(.system(size: 11, weight: .semibold))
+                        Text(action)
+                            .lineLimit(2)
+                    }
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(accent)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(Capsule().fill(accent.opacity(0.12)))
+                }
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous)
+                .fill(Theme.Palette.surface.opacity(0.52))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous)
+                .strokeBorder(Theme.Palette.border, lineWidth: 1)
+        )
+    }
+}
+
+private struct EmptyMorningBriefState: View {
+    let ignoredCount: Int
+
+    var body: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "checkmark.seal.fill")
+                .font(.system(size: 28, weight: .semibold))
+                .foregroundStyle(Theme.Palette.accentSoft)
+
+            Text("Nothing needs attention")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(Theme.Palette.textPrimary)
+
+            Text("\(ignoredCount) low-priority emails were skipped.")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(Theme.Palette.textTertiary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 34)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.Radius.row, style: .continuous)
+                .fill(Theme.Palette.surface.opacity(0.52))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.Radius.row, style: .continuous)
+                .strokeBorder(Theme.Palette.border, lineWidth: 1)
+        )
     }
 }
 

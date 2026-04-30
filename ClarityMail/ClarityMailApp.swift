@@ -9,6 +9,10 @@ import SwiftUI
 
 @main
 struct ClarityMailApp: App {
+    init() {
+        _ = NotificationManager.shared
+    }
+
     var body: some Scene {
         WindowGroup {
             ContentView()

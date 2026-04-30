@@ -8,7 +8,7 @@
 import Foundation
 
 struct APIClient {
-    var baseURL = URL(string: "http://localhost:3000")!
+    var baseURL = URL(string: "https://backend-five-henna-54.vercel.app")!
 
     func googleAuthURL() async throws -> URL {
         let response: GoogleAuthURLResponse = try await get("/auth/google/url")
@@ -263,6 +263,31 @@ struct APIClient {
         return response.summary
     }
 
+    func morningBriefSettings() async throws -> MorningBriefSettings {
+        let response: MorningBriefSettingsResponse = try await get("/morning-brief/settings")
+        return response.settings
+    }
+
+    func saveMorningBriefSettings(_ settings: MorningBriefSettings) async throws -> MorningBriefSettings {
+        let response: MorningBriefSettingsResponse = try await putJSONForResponse(
+            "/morning-brief/settings",
+            body: settings
+        )
+        return response.settings
+    }
+
+    func latestMorningBrief() async throws -> MorningBrief? {
+        let response: MorningBriefLatestResponse = try await get("/morning-brief/latest")
+        return response.brief
+    }
+
+    func runMorningBrief(accountId: String? = nil) async throws -> MorningBriefRunResponse {
+        try await postJSONForResponse(
+            "/morning-brief/run",
+            body: AccountRequest(accountId: accountId)
+        )
+    }
+
     private func get<T: Decodable>(_ path: String, queryItems: [URLQueryItem] = []) async throws -> T {
         let url = makeURL(path, queryItems: queryItems)
         let (data, response) = try await URLSession.shared.data(from: url)
@@ -477,6 +502,19 @@ private struct EmailSummaryResponse: Decodable {
     let summary: String
 }
 
+private struct MorningBriefSettingsResponse: Decodable {
+    let settings: MorningBriefSettings
+}
+
+private struct MorningBriefLatestResponse: Decodable {
+    let brief: MorningBrief?
+}
+
+struct MorningBriefRunResponse: Decodable {
+    let brief: MorningBrief
+    let shouldNotify: Bool
+}
+
 private struct BlockSenderResponse: Decodable {
     let senderEmail: String
 }
@@ -522,6 +560,86 @@ struct DraftSaveResult: Decodable {
     let id: String
     let messageId: String
     let threadId: String
+}
+
+struct MorningBriefSettings: Codable, Hashable {
+    var enabled: Bool
+    var briefTime: String
+    var timeZone: String
+    var lookbackHours: Int
+    var unreadOnly: Bool
+    var includeNewsletters: Bool
+    var onlyNotifyIfImportant: Bool
+
+    static let `default` = MorningBriefSettings(
+        enabled: true,
+        briefTime: "09:00",
+        timeZone: "America/Los_Angeles",
+        lookbackHours: 14,
+        unreadOnly: true,
+        includeNewsletters: false,
+        onlyNotifyIfImportant: true
+    )
+}
+
+struct MorningBrief: Identifiable, Hashable, Decodable {
+    let id: String
+    let windowStart: String
+    let windowEnd: String
+    let generatedAt: String
+    let totalUnread: Int
+    let ignoredCount: Int
+    let settings: MorningBriefSettings
+    let summary: MorningBriefSummary
+
+    var actionableCount: Int {
+        summary.important.count + summary.needsAction.count + summary.deadlines.count
+    }
+
+    var windowText: String {
+        let formatter = ISO8601DateFormatter()
+        guard let start = formatter.date(from: windowStart),
+              let end = formatter.date(from: windowEnd) else {
+            return "Overnight unread emails"
+        }
+
+        let timeFormatter = DateFormatter()
+        timeFormatter.dateFormat = "h:mm a"
+
+        return "\(timeFormatter.string(from: start)) - \(timeFormatter.string(from: end))"
+    }
+}
+
+struct MorningBriefSummary: Hashable, Decodable {
+    let important: [MorningBriefItem]
+    let needsAction: [MorningBriefItem]
+    let deadlines: [MorningBriefItem]
+    let fyi: [MorningBriefItem]
+    let ignored: [MorningBriefItem]
+}
+
+struct MorningBriefItem: Identifiable, Hashable, Decodable {
+    let id: String
+    let sender: String
+    let subject: String
+    let summary: String
+    let action: String?
+}
+
+extension String {
+    var cleanedBriefSubject: String {
+        var value = self
+        while value.localizedCaseInsensitiveContains("Fwd: ") || value.localizedCaseInsensitiveContains("Re: ") {
+            if value.lowercased().hasPrefix("fwd: ") {
+                value = String(value.dropFirst(5))
+            } else if value.lowercased().hasPrefix("re: ") {
+                value = String(value.dropFirst(4))
+            } else {
+                break
+            }
+        }
+        return value
+    }
 }
 
 private struct DraftResponse: Decodable {
