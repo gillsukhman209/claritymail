@@ -65,14 +65,14 @@ struct MailboxView: View {
                             },
                             onOpenSettings: {
                                 isShowingSettings = true
-                            },
-                            isSearching: isLoading && !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            }
                         )
                         .padding(.horizontal, 20)
 
                         EmailListSection(
                             emails: emails,
                             isLoading: isLoading,
+                            isSearchLoading: isLoading && !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                             isLoadingMore: isLoadingMore,
                             canLoadMore: nextPageToken != nil,
                             errorMessage: errorMessage,
@@ -139,9 +139,8 @@ struct MailboxView: View {
                     .zIndex(20)
                 }
             }
-            .overlay(alignment: .bottomTrailing) {
+            .overlay(alignment: .bottom) {
                 UndoSendToast()
-                    .padding(.trailing, 28)
                     .padding(.bottom, 88)
                     .zIndex(30)
             }
@@ -321,7 +320,6 @@ private struct AccountSearchBar: View {
     let onRefreshAccounts: () -> Void
     let onManageBlockedSenders: () -> Void
     let onOpenSettings: () -> Void
-    let isSearching: Bool
 
     private var selectedAccount: GmailAccount? {
         guard let selectedAccountId else { return nil }
@@ -426,12 +424,6 @@ private struct AccountSearchBar: View {
                     .textFieldStyle(.plain)
                     .foregroundStyle(Theme.Palette.textPrimary)
 
-                if isSearching {
-                    ProgressView()
-                        .scaleEffect(0.65)
-                        .frame(width: 18, height: 18)
-                }
-
                 if !searchText.isEmpty {
                     Button {
                         searchText = ""
@@ -524,6 +516,7 @@ private struct GreetingBlock: View {
 private struct EmailListSection: View {
     let emails: [Email]
     let isLoading: Bool
+    let isSearchLoading: Bool
     let isLoadingMore: Bool
     let canLoadMore: Bool
     let errorMessage: String?
@@ -539,7 +532,11 @@ private struct EmailListSection: View {
                     .padding(.horizontal, 4)
             }
 
-            if isLoading && emails.isEmpty {
+            if isSearchLoading {
+                SearchLoadingView()
+                    .frame(maxWidth: .infinity)
+                    .frame(minHeight: 260)
+            } else if isLoading && emails.isEmpty {
                 ProgressView()
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 40)
@@ -567,6 +564,29 @@ private struct EmailListSection: View {
                 }
             }
         }
+    }
+}
+
+private struct SearchLoadingView: View {
+    var body: some View {
+        VStack(spacing: 12) {
+            ProgressView()
+                .scaleEffect(0.95)
+
+            Text("Searching")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Theme.Palette.textTertiary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 46)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.Radius.row, style: .continuous)
+                .fill(Theme.Palette.surface.opacity(0.45))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.Radius.row, style: .continuous)
+                .strokeBorder(Theme.Palette.border, lineWidth: 1)
+        )
     }
 }
 

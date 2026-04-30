@@ -78,6 +78,7 @@ struct EmailDetailView: View {
                 UndoSendToast()
                     .padding(.bottom, 24)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .animation(.snappy(duration: 0.2), value: isShowingReply)
         .navigationTitle("")
