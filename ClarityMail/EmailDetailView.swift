@@ -6,6 +6,9 @@
 //
 
 import SwiftUI
+#if canImport(AppKit)
+import AppKit
+#endif
 
 struct EmailDetailView: View {
     let email: Email
@@ -19,6 +22,8 @@ struct EmailDetailView: View {
     @State private var summary: String?
     @State private var isLoadingSummary = false
     @State private var errorMessage: String?
+    @State private var attachmentData: [String: Data] = [:]
+    @State private var loadingAttachmentIds = Set<String>()
 
     private let apiClient = APIClient()
 
@@ -35,6 +40,8 @@ struct EmailDetailView: View {
                     headerSection
 
                     summaryCard
+
+                    attachmentSection
 
                     if let errorMessage {
                         Text(errorMessage)
@@ -206,16 +213,92 @@ struct EmailDetailView: View {
         )
     }
 
+    @ViewBuilder
+    private var attachmentSection: some View {
+        let attachments = visibleEmail.attachments ?? []
+        if !attachments.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("\(attachments.count) attachment\(attachments.count == 1 ? "" : "s")")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Theme.Palette.textTertiary)
+
+                ForEach(attachments) { attachment in
+                    AttachmentPreview(
+                        attachment: attachment,
+                        data: attachmentData[attachment.id],
+                        isLoading: loadingAttachmentIds.contains(attachment.id),
+                        onOpen: {
+                            openAttachment(attachment)
+                        }
+                    )
+                }
+            }
+        }
+    }
+
+    private func attachmentIcon(for mimeType: String) -> String {
+        if mimeType.hasPrefix("image/") { return "photo" }
+        if mimeType == "application/pdf" { return "doc.richtext" }
+        if mimeType.hasPrefix("video/") { return "film" }
+        if mimeType.hasPrefix("audio/") { return "waveform" }
+        return "paperclip"
+    }
+
     private func loadEmail() async {
         isLoading = true
         defer { isLoading = false }
 
         do {
-            loadedEmail = try await apiClient.email(id: email.id, accountId: accountId)
+            let fetchedEmail = try await apiClient.email(id: email.id, accountId: accountId)
+            loadedEmail = fetchedEmail
             errorMessage = nil
+            await loadAttachments(for: fetchedEmail)
         } catch {
             errorMessage = "Could not load email body."
         }
+    }
+
+    private func loadAttachments(for email: Email) async {
+        for attachment in email.attachments ?? [] where attachmentData[attachment.id] == nil {
+            loadingAttachmentIds.insert(attachment.id)
+            defer { loadingAttachmentIds.remove(attachment.id) }
+
+            do {
+                attachmentData[attachment.id] = try await apiClient.emailAttachment(
+                    messageId: email.id,
+                    attachmentId: attachment.id,
+                    accountId: accountId
+                )
+            } catch {
+                errorMessage = "Could not load attachment."
+            }
+        }
+    }
+
+    private func openAttachment(_ attachment: EmailAttachment) {
+        guard let data = attachmentData[attachment.id] else { return }
+
+        do {
+            let directory = FileManager.default.temporaryDirectory
+                .appendingPathComponent("ClarityMailAttachments", isDirectory: true)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+            let fileURL = directory.appendingPathComponent(safeFilename(attachment.filename))
+            try data.write(to: fileURL, options: [.atomic])
+
+            #if canImport(AppKit)
+            NSWorkspace.shared.open(fileURL)
+            #endif
+        } catch {
+            errorMessage = "Could not open attachment."
+        }
+    }
+
+    private func safeFilename(_ filename: String) -> String {
+        let blocked = CharacterSet(charactersIn: "/\\:")
+        return filename
+            .components(separatedBy: blocked)
+            .joined(separator: "-")
     }
 
     private func loadSummary() async {
@@ -304,6 +387,124 @@ struct EmailDetailView: View {
         }
     }
 }
+
+private struct AttachmentPreview: View {
+    let attachment: EmailAttachment
+    let data: Data?
+    let isLoading: Bool
+    let onOpen: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if attachment.mimeType.hasPrefix("image/"),
+               let data,
+               let image = platformImage(from: data) {
+                imageView(image)
+            }
+
+            Button {
+                onOpen()
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: attachmentIcon(for: attachment.mimeType))
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(Theme.Palette.accentSoft)
+                        .frame(width: 28, height: 28)
+                        .background(
+                            Circle()
+                                .fill(Theme.Palette.accent.opacity(0.12))
+                        )
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(attachment.filename)
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(Theme.Palette.textPrimary)
+                            .lineLimit(1)
+                        Text(detailText)
+                            .font(.system(size: 11))
+                            .foregroundStyle(Theme.Palette.textTertiary)
+                            .lineLimit(1)
+                    }
+
+                    Spacer()
+
+                    if isLoading {
+                        ProgressView()
+                            .scaleEffect(0.7)
+                    } else {
+                        Image(systemName: "arrow.up.right.square")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(Theme.Palette.textTertiary)
+                    }
+                }
+                .padding(12)
+                .background(
+                    RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous)
+                        .fill(Theme.Palette.surface.opacity(0.72))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous)
+                        .strokeBorder(Theme.Palette.border, lineWidth: 1)
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(data == nil)
+        }
+    }
+
+    private var detailText: String {
+        if isLoading {
+            return "Loading attachment..."
+        }
+
+        return "\(attachment.mimeType) • \(attachment.sizeText)"
+    }
+
+    private func attachmentIcon(for mimeType: String) -> String {
+        if mimeType.hasPrefix("image/") { return "photo" }
+        if mimeType == "application/pdf" { return "doc.richtext" }
+        if mimeType.hasPrefix("video/") { return "film" }
+        if mimeType.hasPrefix("audio/") { return "waveform" }
+        return "paperclip"
+    }
+
+    @ViewBuilder
+    private func imageView(_ image: PlatformImage) -> some View {
+        #if canImport(AppKit)
+        Image(nsImage: image)
+            .resizable()
+            .scaledToFit()
+            .frame(maxWidth: .infinity)
+            .frame(maxHeight: 360)
+            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous)
+                    .strokeBorder(Theme.Palette.border, lineWidth: 1)
+            )
+            .onTapGesture {
+                onOpen()
+            }
+        #elseif canImport(UIKit)
+        Image(uiImage: image)
+            .resizable()
+            .scaledToFit()
+            .frame(maxWidth: .infinity)
+            .frame(maxHeight: 360)
+            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous))
+        #endif
+    }
+
+    private func platformImage(from data: Data) -> PlatformImage? {
+        #if canImport(AppKit)
+        return NSImage(data: data)
+        #elseif canImport(UIKit)
+        return UIImage(data: data)
+        #else
+        return nil
+        #endif
+    }
+}
+
 
 private struct SummaryContentView: View {
     let summary: String?

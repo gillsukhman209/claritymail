@@ -12,10 +12,12 @@ import {
   archiveEmail,
   blockSenderInGmail,
   getEmail,
+  getEmailAttachment,
   listMailboxEmails,
   markEmailRead,
   markEmailUnread,
   type MailboxFolder,
+  type EmailAttachment,
   replyToEmail,
   sendEmail,
   starEmail,
@@ -29,6 +31,12 @@ export const emailRoutes = Router();
 
 function mailboxFolderFromQuery(value: unknown): MailboxFolder {
   return value === "sent" || value === "archive" || value === "trash" ? value : "inbox";
+}
+
+const maxAttachmentBytes = 25 * 1024 * 1024;
+
+function attachmentByteCount(attachments: EmailAttachment[] = []) {
+  return attachments.reduce((total, attachment) => total + Buffer.from(attachment.data, "base64").length, 0);
 }
 
 async function requireSelectedAccount(request: import("express").Request, response: import("express").Response) {
@@ -127,6 +135,18 @@ emailRoutes.get("/emails/:id", async (request, response, next) => {
   }
 });
 
+emailRoutes.get("/emails/:id/attachments/:attachmentId", async (request, response, next) => {
+  try {
+    const account = await requireSelectedAccount(request, response);
+    if (!account) return;
+
+    const attachment = await getEmailAttachment(account, request.params.id, request.params.attachmentId);
+    response.json({ attachment });
+  } catch (error) {
+    next(error);
+  }
+});
+
 emailRoutes.post("/emails/:id/archive", async (request, response, next) => {
   try {
     const account = await requireSelectedAccount(request, response);
@@ -144,14 +164,24 @@ emailRoutes.post("/send", async (request, response, next) => {
     const account = await requireSelectedAccount(request, response);
     if (!account) return;
 
-    const { to, subject, body } = request.body as { to?: string; subject?: string; body?: string };
+    const { to, subject, body, attachments } = request.body as {
+      to?: string;
+      subject?: string;
+      body?: string;
+      attachments?: EmailAttachment[];
+    };
 
-    if (!to || !subject || !body) {
-      response.status(400).json({ error: "Missing to, subject, or body." });
+    if (!to || !body) {
+      response.status(400).json({ error: "Missing to or body." });
       return;
     }
 
-    const result = await sendEmail(account, { to, subject, body });
+    if (attachmentByteCount(attachments) > maxAttachmentBytes) {
+      response.status(400).json({ error: "Gmail attachments cannot exceed 25 MB total." });
+      return;
+    }
+
+    const result = await sendEmail(account, { to, subject, body, attachments });
     response.json({ ok: true, message: result });
   } catch (error) {
     next(error);
@@ -163,19 +193,25 @@ emailRoutes.post("/reply", async (request, response, next) => {
     const account = await requireSelectedAccount(request, response);
     if (!account) return;
 
-    const { to, subject, body, threadId } = request.body as {
+    const { to, subject, body, threadId, attachments } = request.body as {
       to?: string;
       subject?: string;
       body?: string;
       threadId?: string;
+      attachments?: EmailAttachment[];
     };
 
-    if (!to || !subject || !body || !threadId) {
-      response.status(400).json({ error: "Missing to, subject, body, or threadId." });
+    if (!to || !body || !threadId) {
+      response.status(400).json({ error: "Missing to, body, or threadId." });
       return;
     }
 
-    const result = await replyToEmail(account, { to, subject, body, threadId });
+    if (attachmentByteCount(attachments) > maxAttachmentBytes) {
+      response.status(400).json({ error: "Gmail attachments cannot exceed 25 MB total." });
+      return;
+    }
+
+    const result = await replyToEmail(account, { to, subject, body, threadId, attachments });
     response.json({ ok: true, message: result });
   } catch (error) {
     next(error);

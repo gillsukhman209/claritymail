@@ -20,6 +20,7 @@ struct Email: Identifiable, Hashable, Codable {
     var isStarred: Bool
     var body: String?
     var htmlBody: String?
+    var attachments: [EmailAttachment]?
 
     var senderEmailAddress: String {
         if let start = sender.lastIndex(of: "<"),
@@ -120,5 +121,17 @@ struct Email: Identifiable, Hashable, Codable {
         case isStarred
         case body
         case htmlBody
+        case attachments
+    }
+}
+
+struct EmailAttachment: Identifiable, Hashable, Codable {
+    let id: String
+    let filename: String
+    let mimeType: String
+    let size: Int
+
+    var sizeText: String {
+        ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file)
     }
 }

@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ComposerView: View {
     enum Mode {
@@ -20,18 +21,36 @@ struct ComposerView: View {
     }
 
     let mode: Mode
-    let accountId: String?
+    let accounts: [GmailAccount]
     let onSent: () -> Void
     let onClose: () -> Void
 
+    @State private var selectedAccountId: String?
     @State private var to = ""
     @State private var subject = ""
     @State private var messageBody = ""
+    @State private var attachments: [ComposerAttachment] = []
+    @State private var isShowingFileImporter = false
     @State private var isSending = false
     @State private var errorMessage: String?
     @FocusState private var focusedField: FocusField?
 
     private let apiClient = APIClient()
+    private let maxAttachmentBytes = 25 * 1024 * 1024
+
+    init(
+        mode: Mode,
+        accountId: String?,
+        accounts: [GmailAccount] = [],
+        onSent: @escaping () -> Void,
+        onClose: @escaping () -> Void
+    ) {
+        self.mode = mode
+        self.accounts = accounts
+        self.onSent = onSent
+        self.onClose = onClose
+        _selectedAccountId = State(initialValue: accountId)
+    }
 
     private var title: String {
         switch mode {
@@ -45,8 +64,21 @@ struct ComposerView: View {
     private var canSend: Bool {
         !isSending &&
         !to.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-        !subject.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-        !messageBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !messageBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+        attachmentBytes <= maxAttachmentBytes
+    }
+
+    private var selectedAccount: GmailAccount? {
+        guard let selectedAccountId else { return nil }
+        return accounts.first { $0.id == selectedAccountId }
+    }
+
+    private var attachmentBytes: Int {
+        attachments.reduce(0) { $0 + $1.data.count }
+    }
+
+    private var attachmentSizeText: String {
+        ByteCountFormatter.string(fromByteCount: Int64(attachmentBytes), countStyle: .file)
     }
 
     var body: some View {
@@ -111,7 +143,13 @@ struct ComposerView: View {
                     .foregroundStyle(Theme.Palette.textPrimary)
                     .focused($focusedField, equals: .body)
                     .padding(12)
-                    .frame(height: 190)
+                    .frame(height: attachments.isEmpty ? 165 : 105)
+
+                if !attachments.isEmpty {
+                    attachmentList
+                        .padding(.horizontal, 14)
+                        .padding(.bottom, 10)
+                }
 
                 if let errorMessage {
                     Text(errorMessage)
@@ -134,7 +172,7 @@ struct ComposerView: View {
                     .foregroundStyle(Theme.Palette.textTertiary)
 
                     Button {
-                        focusedField = .body
+                        isShowingFileImporter = true
                     } label: {
                         Image(systemName: "paperclip")
                     }
@@ -143,9 +181,7 @@ struct ComposerView: View {
 
                     Spacer()
 
-                    Text(accountId == nil ? "Default account" : "Selected account")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(Theme.Palette.textTertiary)
+                    accountPicker
 
                     Button {
                         Task { await send() }
@@ -181,16 +217,105 @@ struct ComposerView: View {
                 .strokeBorder(Theme.Palette.borderStrong, lineWidth: 1)
         )
         .shadow(color: .black.opacity(0.35), radius: 34, x: 0, y: 18)
+        .fileImporter(
+            isPresented: $isShowingFileImporter,
+            allowedContentTypes: [.item],
+            allowsMultipleSelection: true
+        ) { result in
+            handleFileImport(result)
+        }
         .onAppear {
             configureInitialValues()
             focusInitialField()
         }
     }
 
+    private var attachmentList: some View {
+        VStack(spacing: 6) {
+            HStack {
+                Text("\(attachments.count) attachment\(attachments.count == 1 ? "" : "s")")
+                Text(attachmentSizeText)
+                Spacer()
+                Text("25 MB max")
+            }
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(attachmentBytes > maxAttachmentBytes ? Theme.Palette.warm : Theme.Palette.textTertiary)
+
+            ForEach(attachments) { attachment in
+                HStack(spacing: 8) {
+                    Image(systemName: "paperclip")
+                        .foregroundStyle(Theme.Palette.textTertiary)
+
+                    Text(attachment.name)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Theme.Palette.textSecondary)
+                        .lineLimit(1)
+
+                    Spacer()
+
+                    Text(attachment.sizeText)
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.Palette.textTertiary)
+
+                    Button {
+                        attachments.removeAll { $0.id == attachment.id }
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 10, weight: .semibold))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Theme.Palette.textTertiary)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Theme.Palette.surfaceElevated.opacity(0.7))
+                )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var accountPicker: some View {
+        if accounts.isEmpty {
+            Text(selectedAccountId == nil ? "Default account" : "Original account")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Theme.Palette.textTertiary)
+        } else {
+            Menu {
+                ForEach(accounts) { account in
+                    Button {
+                        selectedAccountId = account.id
+                    } label: {
+                        Label(
+                            account.email,
+                            systemImage: selectedAccountId == account.id ? "checkmark.circle.fill" : "circle"
+                        )
+                    }
+                }
+            } label: {
+                HStack(spacing: 5) {
+                    Text(selectedAccount?.email ?? accounts.first?.email ?? "Select account")
+                        .lineLimit(1)
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 8, weight: .bold))
+                }
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Theme.Palette.textTertiary)
+                .frame(maxWidth: 190, alignment: .trailing)
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+        }
+    }
+
     private func configureInitialValues() {
         switch mode {
         case .compose:
-            break
+            if selectedAccountId == nil {
+                selectedAccountId = accounts.first?.id
+            }
         case .reply(let email):
             to = email.senderEmailAddress
             subject = email.subject.lowercased().hasPrefix("re:") ? email.subject : "Re: \(email.subject)"
@@ -214,11 +339,32 @@ struct ComposerView: View {
         defer { isSending = false }
 
         do {
+            let uploads = attachments.map {
+                EmailAttachmentUpload(
+                    filename: $0.name,
+                    mimeType: $0.mimeType,
+                    data: $0.data.base64EncodedString()
+                )
+            }
+
             switch mode {
             case .compose:
-                try await apiClient.sendEmail(to: to, subject: subject, body: messageBody, accountId: accountId)
+                try await apiClient.sendEmail(
+                    to: to,
+                    subject: subject,
+                    body: messageBody,
+                    accountId: selectedAccountId,
+                    attachments: uploads
+                )
             case .reply(let email):
-                try await apiClient.reply(to: to, subject: subject, body: messageBody, threadId: email.threadId, accountId: accountId)
+                try await apiClient.reply(
+                    to: to,
+                    subject: subject,
+                    body: messageBody,
+                    threadId: email.threadId,
+                    accountId: selectedAccountId,
+                    attachments: uploads
+                )
             }
 
             errorMessage = nil
@@ -227,5 +373,56 @@ struct ComposerView: View {
         } catch {
             errorMessage = "Could not send email."
         }
+    }
+
+    private func handleFileImport(_ result: Result<[URL], Error>) {
+        do {
+            let urls = try result.get()
+            for url in urls {
+                addAttachment(from: url)
+            }
+        } catch {
+            errorMessage = "Could not attach file."
+        }
+    }
+
+    private func addAttachment(from url: URL) {
+        let canAccess = url.startAccessingSecurityScopedResource()
+        defer {
+            if canAccess {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
+
+        do {
+            let data = try Data(contentsOf: url)
+            guard attachmentBytes + data.count <= maxAttachmentBytes else {
+                errorMessage = "Gmail allows up to 25 MB total attachments."
+                return
+            }
+
+            let resourceValues = try? url.resourceValues(forKeys: [.contentTypeKey])
+            attachments.append(
+                ComposerAttachment(
+                    name: url.lastPathComponent,
+                    mimeType: resourceValues?.contentType?.preferredMIMEType ?? "application/octet-stream",
+                    data: data
+                )
+            )
+            errorMessage = nil
+        } catch {
+            errorMessage = "Could not attach file."
+        }
+    }
+}
+
+private struct ComposerAttachment: Identifiable {
+    let id = UUID()
+    let name: String
+    let mimeType: String
+    let data: Data
+
+    var sizeText: String {
+        ByteCountFormatter.string(fromByteCount: Int64(data.count), countStyle: .file)
     }
 }

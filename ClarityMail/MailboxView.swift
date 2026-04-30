@@ -88,6 +88,7 @@ struct MailboxView: View {
                     ComposerView(
                         mode: .compose,
                         accountId: selectedAccountId,
+                        accounts: accounts,
                         onSent: {
                             Task { await loadEmails() }
                         },

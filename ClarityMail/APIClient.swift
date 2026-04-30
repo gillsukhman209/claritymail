@@ -58,6 +58,14 @@ struct APIClient {
         return response.email
     }
 
+    func emailAttachment(messageId: Email.ID, attachmentId: String, accountId: String? = nil) async throws -> Data {
+        let response: EmailAttachmentResponse = try await get(
+            "/emails/\(messageId)/attachments/\(attachmentId)",
+            queryItems: accountQueryItems(accountId: accountId)
+        )
+        return try response.attachment.decodedData()
+    }
+
     func archiveEmail(id: Email.ID, accountId: String? = nil) async throws {
         try await post("/emails/\(id)/archive", queryItems: accountQueryItems(accountId: accountId))
     }
@@ -90,11 +98,26 @@ struct APIClient {
         try await post("/emails/\(id)/unstar", queryItems: accountQueryItems(accountId: accountId))
     }
 
-    func sendEmail(to: String, subject: String, body: String, accountId: String? = nil) async throws {
-        try await postJSON("/send", body: SendEmailRequest(accountId: accountId, to: to, subject: subject, body: body))
+    func sendEmail(
+        to: String,
+        subject: String,
+        body: String,
+        accountId: String? = nil,
+        attachments: [EmailAttachmentUpload] = []
+    ) async throws {
+        try await postJSON(
+            "/send",
+            body: SendEmailRequest(
+                accountId: accountId,
+                to: to,
+                subject: subject,
+                body: body,
+                attachments: attachments
+            )
+        )
     }
 
-    func reply(to email: Email, body: String, accountId: String? = nil) async throws {
+    func reply(to email: Email, body: String, accountId: String? = nil, attachments: [EmailAttachmentUpload] = []) async throws {
         try await postJSON(
             "/reply",
             body: ReplyEmailRequest(
@@ -102,12 +125,20 @@ struct APIClient {
                 to: email.senderEmailAddress,
                 subject: email.subject,
                 body: body,
-                threadId: email.threadId
+                threadId: email.threadId,
+                attachments: attachments
             )
         )
     }
 
-    func reply(to: String, subject: String, body: String, threadId: String, accountId: String? = nil) async throws {
+    func reply(
+        to: String,
+        subject: String,
+        body: String,
+        threadId: String,
+        accountId: String? = nil,
+        attachments: [EmailAttachmentUpload] = []
+    ) async throws {
         try await postJSON(
             "/reply",
             body: ReplyEmailRequest(
@@ -115,7 +146,8 @@ struct APIClient {
                 to: to,
                 subject: subject,
                 body: body,
-                threadId: threadId
+                threadId: threadId,
+                attachments: attachments
             )
         )
     }
@@ -284,6 +316,32 @@ private struct EmailResponse: Decodable {
     let email: Email
 }
 
+private struct EmailAttachmentResponse: Decodable {
+    let attachment: EmailAttachmentPayload
+}
+
+private struct EmailAttachmentPayload: Decodable {
+    let data: String
+    let size: Int
+
+    func decodedData() throws -> Data {
+        var normalized = data
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+
+        let padding = normalized.count % 4
+        if padding > 0 {
+            normalized += String(repeating: "=", count: 4 - padding)
+        }
+
+        guard let decoded = Data(base64Encoded: normalized) else {
+            throw APIError.badResponse
+        }
+
+        return decoded
+    }
+}
+
 private struct EmailSummaryResponse: Decodable {
     let summary: String
 }
@@ -318,11 +376,18 @@ struct BlockedSender: Identifiable, Hashable, Decodable {
     let senderEmail: String
 }
 
+struct EmailAttachmentUpload: Encodable {
+    let filename: String
+    let mimeType: String
+    let data: String
+}
+
 private struct SendEmailRequest: Encodable {
     let accountId: String?
     let to: String
     let subject: String
     let body: String
+    let attachments: [EmailAttachmentUpload]
 }
 
 private struct ReplyEmailRequest: Encodable {
@@ -331,6 +396,7 @@ private struct ReplyEmailRequest: Encodable {
     let subject: String
     let body: String
     let threadId: String
+    let attachments: [EmailAttachmentUpload]
 }
 
 private struct AccountRequest: Encodable {
