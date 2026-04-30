@@ -329,6 +329,18 @@ export async function listMailboxEmails(
   };
 }
 
+export async function getUnreadInboxEstimate(account: GmailAccount) {
+  const gmail = getGmailClient(account);
+  const response = await gmail.users.messages.list({
+    userId: "me",
+    labelIds: ["INBOX"],
+    q: "is:unread",
+    maxResults: 1
+  });
+
+  return response.data.resultSizeEstimate ?? 0;
+}
+
 export async function getEmail(account: GmailAccount, id: string) {
   const gmail = getGmailClient(account);
 

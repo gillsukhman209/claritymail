@@ -16,6 +16,10 @@
     {
       "path": "/cron/morning-brief",
       "schedule": "0 16 * * *"
+    },
+    {
+      "path": "/cron/gmail-watch",
+      "schedule": "0 9 * * *"
     }
   ]
 }

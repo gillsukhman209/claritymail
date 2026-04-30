@@ -7,6 +7,7 @@ import UIKit
 extension Notification.Name {
     static let openMorningBrief = Notification.Name("openMorningBrief")
     static let openEmailFromNotification = Notification.Name("openEmailFromNotification")
+    static let emailSyncNeeded = Notification.Name("emailSyncNeeded")
 }
 
 final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
@@ -84,11 +85,30 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
         try? await UNUserNotificationCenter.current().add(request)
     }
 
+    func setBadgeCount(_ count: Int) async {
+        if #available(iOS 16.0, macOS 13.0, *) {
+            try? await UNUserNotificationCenter.current().setBadgeCount(max(count, 0))
+        } else {
+            await MainActor.run {
+                #if os(iOS)
+                UIApplication.shared.applicationIconBadgeNumber = max(count, 0)
+                #endif
+            }
+        }
+    }
+
     func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification
     ) async -> UNNotificationPresentationOptions {
-        [.banner, .list, .sound]
+        let userInfo = notification.request.content.userInfo
+        if (userInfo["route"] as? String) == "email" {
+            await MainActor.run {
+                NotificationCenter.default.post(name: .emailSyncNeeded, object: nil)
+            }
+        }
+
+        return [.banner, .list, .sound]
     }
 
     func userNotificationCenter(

@@ -9,7 +9,7 @@ import {
 } from "../db/accounts.repo.js";
 import { saveDeviceToken } from "../db/deviceTokens.repo.js";
 import { listBlockedSenderEmails, filterBlockedEmails } from "../db/blockedSenders.repo.js";
-import { getEmail, listGmailHistory, startGmailWatch } from "../services/gmail.service.js";
+import { getEmail, getUnreadInboxEstimate, listGmailHistory, startGmailWatch } from "../services/gmail.service.js";
 import { notifyDevicesForEmail } from "../services/apns.service.js";
 
 type PubSubPushBody = {
@@ -34,6 +34,24 @@ function isFreshUnreadEmail(email: any) {
   return !email.isRead && Date.now() - Date.parse(email.receivedAt) <= maxNotificationAgeMs;
 }
 
+async function totalUnreadInboxCount() {
+  const accounts = await listGoogleAccounts();
+  const counts = await Promise.all(
+    accounts.map(async (accountSummary) => {
+      const account = await getGoogleAccountById(accountSummary.id);
+      if (!account) return 0;
+
+      try {
+        return await getUnreadInboxEstimate(account);
+      } catch {
+        return 0;
+      }
+    })
+  );
+
+  return counts.reduce((total, count) => total + count, 0);
+}
+
 async function notifyFreshInboxMessages(account: NonNullable<Awaited<ReturnType<typeof getGoogleAccountById>>>, messageIds: string[]) {
   if (messageIds.length === 0) return;
 
@@ -53,7 +71,10 @@ async function notifyFreshInboxMessages(account: NonNullable<Awaited<ReturnType<
     blockedSenders
   ).filter(isFreshUnreadEmail);
 
-  await Promise.all(notifyableEmails.map((email) => notifyDevicesForEmail(email)));
+  if (notifyableEmails.length === 0) return;
+
+  const badgeCount = await totalUnreadInboxCount();
+  await Promise.all(notifyableEmails.map((email) => notifyDevicesForEmail(email, badgeCount)));
 }
 
 realtimeRoutes.post("/devices/register", async (request, response, next) => {
@@ -75,6 +96,18 @@ realtimeRoutes.post("/devices/register", async (request, response, next) => {
 
     const device = await saveDeviceToken({ token, platform, environment });
     response.json({ ok: true, deviceId: device.id });
+  } catch (error) {
+    next(error);
+  }
+});
+
+realtimeRoutes.get("/sync/status", async (_request, response, next) => {
+  try {
+    response.json({
+      ok: true,
+      unreadInboxCount: await totalUnreadInboxCount(),
+      checkedAt: new Date().toISOString()
+    });
   } catch (error) {
     next(error);
   }
@@ -115,6 +148,32 @@ realtimeRoutes.post("/gmail/watch", async (request, response, next) => {
   }
 });
 
+realtimeRoutes.get("/cron/gmail-watch", async (request, response, next) => {
+  try {
+    const expectedSecret = process.env.CRON_SECRET;
+    if (expectedSecret && request.query.secret !== expectedSecret && request.headers.authorization !== `Bearer ${expectedSecret}`) {
+      response.status(401).json({ error: "Invalid cron secret." });
+      return;
+    }
+
+    const accounts = await listGoogleAccounts();
+    const watches = [];
+
+    for (const accountSummary of accounts) {
+      const account = await getGoogleAccountById(accountSummary.id);
+      if (!account) continue;
+
+      const watch = await startGmailWatch(account);
+      await updateGmailWatchState(account.id, watch);
+      watches.push({ accountId: account.id, email: account.email, ...watch });
+    }
+
+    response.json({ ok: true, watches });
+  } catch (error) {
+    next(error);
+  }
+});
+
 realtimeRoutes.post("/webhook/gmail", async (request, response, next) => {
   try {
     const expectedSecret = process.env.GMAIL_WEBHOOK_SECRET;
@@ -144,7 +203,16 @@ realtimeRoutes.post("/webhook/gmail", async (request, response, next) => {
     }
 
     const startHistoryId = account.lastHistoryId ?? notification.historyId;
-    const history = await listGmailHistory(account, startHistoryId);
+    let history: Awaited<ReturnType<typeof listGmailHistory>>;
+
+    try {
+      history = await listGmailHistory(account, startHistoryId);
+    } catch {
+      const watch = await startGmailWatch(account);
+      await updateGmailWatchState(account.id, watch);
+      response.status(204).send();
+      return;
+    }
 
     await updateGmailWatchState(account.id, { historyId: history.historyId });
     await saveGmailSyncEvent({

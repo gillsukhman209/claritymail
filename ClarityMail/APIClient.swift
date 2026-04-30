@@ -295,6 +295,10 @@ struct APIClient {
         )
     }
 
+    func syncStatus() async throws -> SyncStatus {
+        try await get("/sync/status")
+    }
+
     func summarizeEmail(id: Email.ID, accountId: String? = nil) async throws -> String {
         let response: EmailSummaryResponse = try await postJSONForResponse(
             "/emails/\(id)/summary",
@@ -577,6 +581,11 @@ private struct ImportantSenderActionResponse: Decodable {
 
 private struct AccountsResponse: Decodable {
     let accounts: [GmailAccount]
+}
+
+struct SyncStatus: Decodable {
+    let unreadInboxCount: Int
+    let checkedAt: String
 }
 
 struct EmailPage {

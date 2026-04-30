@@ -10,6 +10,7 @@ import SwiftUI
 struct MailboxView: View {
     @ObservedObject var session: SessionStore
     @Environment(\.openURL) private var openURL
+    @Environment(\.scenePhase) private var scenePhase
 
     @State private var selectedEmail: Email?
     @State private var emails: [Email] = []
@@ -197,6 +198,7 @@ struct MailboxView: View {
                 await NotificationManager.shared.requestAuthorization()
                 await loadAccounts()
                 await loadEmails()
+                await refreshSyncStatus()
                 await startRealtimeSync()
                 startAutoRefresh()
                 startMorningBriefPolling()
@@ -239,12 +241,26 @@ struct MailboxView: View {
                 guard let url = session.pendingAuthURL else { return }
                 openURL(url)
             }
+            .onChange(of: scenePhase) {
+                guard scenePhase == .active else { return }
+                Task {
+                    await refreshSyncStatus()
+                    await loadEmails(notifyForNewEmails: false)
+                    openPendingNotificationEmailIfNeeded()
+                }
+            }
             .onReceive(NotificationCenter.default.publisher(for: .openMorningBrief)) { _ in
                 isShowingMorningBrief = true
                 UserDefaults.standard.removeObject(forKey: "pendingMorningBriefId")
             }
             .onReceive(NotificationCenter.default.publisher(for: .openEmailFromNotification)) { _ in
                 openPendingNotificationEmailIfNeeded()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .emailSyncNeeded)) { _ in
+                Task {
+                    await refreshSyncStatus()
+                    await loadEmails(notifyForNewEmails: false)
+                }
             }
             .onDisappear {
                 autoRefreshTask?.cancel()
@@ -341,6 +357,7 @@ struct MailboxView: View {
             nextPageToken = page.nextPageToken
             knownEmailIds = fetchedIds
             updateNotificationWatermark(with: fetchedEmails)
+            await updateBadgeCount()
             selectedEmailIds.removeAll()
             isSelectionMode = false
             hasLoadedInitialEmails = true
@@ -546,15 +563,37 @@ struct MailboxView: View {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(20))
                 if Task.isCancelled { return }
-                guard selectedFolder == .inbox,
-                      searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                      !isLoading,
-                      !isLoadingMore,
-                      !isSelectionMode
+            guard selectedFolder == .inbox,
+                  searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  !isLoading,
+                  !isLoadingMore,
+                  !isSelectionMode
                 else { continue }
-                await loadEmails()
+                await refreshSyncStatus()
+                await loadEmails(notifyForNewEmails: false)
             }
         }
+    }
+
+    private func refreshSyncStatus() async {
+        do {
+            let status = try await apiClient.syncStatus()
+            await NotificationManager.shared.setBadgeCount(status.unreadInboxCount)
+        } catch {
+            // Badge refresh should not block inbox usage.
+        }
+    }
+
+    private func updateBadgeCount() async {
+        guard selectedAccountId == nil,
+              selectedFolder == .inbox,
+              searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            await refreshSyncStatus()
+            return
+        }
+
+        await NotificationManager.shared.setBadgeCount(emails.filter { !$0.isRead }.count)
     }
 
     private func startMorningBriefPolling() {

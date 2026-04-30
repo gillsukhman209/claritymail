@@ -67,7 +67,7 @@ function senderDisplayName(sender: string) {
   return match?.[1]?.trim() || sender;
 }
 
-function requestApnsPush(device: DeviceTokenRecord, email: PushEmail) {
+function requestApnsPush(device: DeviceTokenRecord, email: PushEmail, badgeCount?: number) {
   const bundleId = process.env.APNS_BUNDLE_ID;
   if (!bundleId) {
     throw new Error("Missing APNS_BUNDLE_ID.");
@@ -81,7 +81,8 @@ function requestApnsPush(device: DeviceTokenRecord, email: PushEmail) {
         subtitle: email.subject,
         body: email.snippet
       },
-      sound: "default"
+      sound: "default",
+      ...(typeof badgeCount === "number" ? { badge: badgeCount } : {})
     },
     route: "email",
     emailId: email.id,
@@ -114,9 +115,9 @@ function requestApnsPush(device: DeviceTokenRecord, email: PushEmail) {
   });
 }
 
-export async function notifyDevicesForEmail(email: PushEmail) {
+export async function notifyDevicesForEmail(email: PushEmail, badgeCount?: number) {
   const devices = await listDeviceTokens(apnsEnvironment());
   if (devices.length === 0) return;
 
-  await Promise.all(devices.map((device) => requestApnsPush(device, email)));
+  await Promise.all(devices.map((device) => requestApnsPush(device, email, badgeCount)));
 }
