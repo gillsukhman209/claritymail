@@ -83,6 +83,25 @@ struct MailboxView: View {
                 .padding(.horizontal, 28)
                 .padding(.bottom, 12)
             }
+            .overlay(alignment: .bottomTrailing) {
+                if isShowingComposer {
+                    ComposerView(
+                        mode: .compose,
+                        accountId: selectedAccountId,
+                        onSent: {
+                            Task { await loadEmails() }
+                        },
+                        onClose: {
+                            isShowingComposer = false
+                        }
+                    )
+                    .padding(.trailing, 24)
+                    .padding(.bottom, 24)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .zIndex(20)
+                }
+            }
+            .animation(.snappy(duration: 0.2), value: isShowingComposer)
             .modifier(HideNavigationBarModifier())
             .navigationDestination(item: $selectedEmail) { email in
                 EmailDetailView(email: email, accountId: selectedAccountId ?? email.accountId) { blockedSender in
@@ -130,13 +149,6 @@ struct MailboxView: View {
             .onDisappear {
                 autoRefreshTask?.cancel()
                 searchTask?.cancel()
-            }
-            .sheet(isPresented: $isShowingComposer) {
-                NavigationStack {
-                    ComposerView(mode: .compose, accountId: selectedAccountId) {
-                        Task { await loadEmails() }
-                    }
-                }
             }
             .sheet(isPresented: $isShowingBlockedSenders) {
                 BlockedSendersView(accountId: selectedAccountId)

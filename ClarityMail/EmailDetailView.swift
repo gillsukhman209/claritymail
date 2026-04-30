@@ -59,8 +59,38 @@ struct EmailDetailView: View {
                 .padding(.bottom, 40)
             }
             .scrollIndicators(.hidden)
+
+            if isShowingReply {
+                VStack {
+                    Spacer()
+                    HStack {
+                        Spacer()
+                        ComposerView(
+                            mode: .reply(visibleEmail),
+                            accountId: accountId,
+                            onSent: {},
+                            onClose: {
+                                isShowingReply = false
+                            }
+                        )
+                        .padding(.trailing, 24)
+                        .padding(.bottom, 24)
+                    }
+                }
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .zIndex(20)
+            }
         }
+        .animation(.snappy(duration: 0.2), value: isShowingReply)
         .navigationTitle("")
+        .background {
+            Button("") {
+                Task { await trash() }
+            }
+            .keyboardShortcut(.delete, modifiers: [])
+            .disabled(isPerformingAction || isShowingReply)
+            .opacity(0)
+        }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button {
@@ -102,7 +132,6 @@ struct EmailDetailView: View {
                     } label: {
                         Label("Trash", systemImage: "trash")
                     }
-                    .keyboardShortcut(.delete, modifiers: [])
 
                     Button(role: .destructive) {
                         Task { await blockSender() }
@@ -119,11 +148,6 @@ struct EmailDetailView: View {
         .task(id: email.id) {
             await loadEmail()
             await loadSummary()
-        }
-        .sheet(isPresented: $isShowingReply) {
-            NavigationStack {
-                ComposerView(mode: .reply(visibleEmail), accountId: accountId) {}
-            }
         }
         .tint(Theme.Palette.accent)
     }
@@ -248,6 +272,10 @@ struct EmailDetailView: View {
     private func trash() async {
         await performAction {
             try await apiClient.trashEmail(id: visibleEmail.id, accountId: accountId)
+        }
+
+        if errorMessage == nil {
+            dismiss()
         }
     }
 
