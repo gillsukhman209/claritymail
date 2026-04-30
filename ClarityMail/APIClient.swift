@@ -642,6 +642,19 @@ extension String {
     }
 }
 
+extension Date {
+    var emailRowDateText: String {
+        let formatter = DateFormatter()
+        let calendar = Calendar.current
+        if calendar.component(.year, from: self) == calendar.component(.year, from: .now) {
+            formatter.dateFormat = "MMM d\nh:mm a"
+        } else {
+            formatter.dateFormat = "MMM d, yyyy\nh:mm a"
+        }
+        return formatter.string(from: self)
+    }
+}
+
 private struct DraftResponse: Decodable {
     let draft: DraftSaveResult
 }

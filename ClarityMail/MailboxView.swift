@@ -30,6 +30,9 @@ struct MailboxView: View {
     @State private var morningBriefTask: Task<Void, Never>?
     @State private var searchTask: Task<Void, Never>?
     @State private var knownEmailIds = Set<String>()
+    @State private var selectedEmailIds = Set<Email.ID>()
+    @State private var isSelectionMode = false
+    @State private var isPerformingBulkAction = false
     @State private var hasLoadedInitialEmails = false
 
     private let apiClient = APIClient()
@@ -78,6 +81,26 @@ struct MailboxView: View {
                             isLoadingMore: isLoadingMore,
                             canLoadMore: nextPageToken != nil,
                             errorMessage: errorMessage,
+                            selectedEmailIds: selectedEmailIds,
+                            isSelectionMode: isSelectionMode,
+                            isPerformingBulkAction: isPerformingBulkAction,
+                            selectedFolder: selectedFolder,
+                            onSetSelectionMode: { isEnabled in
+                                isSelectionMode = isEnabled
+                                if !isEnabled {
+                                    selectedEmailIds.removeAll()
+                                }
+                            },
+                            onSelectAll: {
+                                selectedEmailIds = Set(emails.map(\.id))
+                                isSelectionMode = true
+                            },
+                            onToggleSelection: { email in
+                                toggleSelection(email)
+                            },
+                            onBulkAction: { action in
+                                Task { await performBulkAction(action) }
+                            },
                             onSelect: { email in
                                 if selectedFolder == .drafts || email.draftId != nil {
                                     draftToEdit = email
@@ -264,6 +287,8 @@ struct MailboxView: View {
             emails = fetchedEmails
             nextPageToken = page.nextPageToken
             knownEmailIds = fetchedIds
+            selectedEmailIds.removeAll()
+            isSelectionMode = false
             hasLoadedInitialEmails = true
             errorMessage = nil
         } catch {
@@ -299,6 +324,84 @@ struct MailboxView: View {
         hasLoadedInitialEmails &&
         selectedFolder == .inbox &&
         searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var selectedEmails: [Email] {
+        emails.filter { selectedEmailIds.contains($0.id) }
+    }
+
+    private func toggleSelection(_ email: Email) {
+        if selectedEmailIds.contains(email.id) {
+            selectedEmailIds.remove(email.id)
+        } else {
+            selectedEmailIds.insert(email.id)
+        }
+        isSelectionMode = !selectedEmailIds.isEmpty
+    }
+
+    private func performBulkAction(_ action: BulkEmailAction) async {
+        let targets = selectedEmails
+        guard !targets.isEmpty, !isPerformingBulkAction else { return }
+
+        isPerformingBulkAction = true
+        defer { isPerformingBulkAction = false }
+
+        do {
+            for email in targets {
+                try await perform(action, email: email)
+            }
+
+            applyBulkAction(action, to: Set(targets.map(\.id)))
+            selectedEmailIds.removeAll()
+            isSelectionMode = false
+            errorMessage = nil
+        } catch {
+            errorMessage = "Could not update selected emails."
+        }
+    }
+
+    private func perform(_ action: BulkEmailAction, email: Email) async throws {
+        switch action {
+        case .trash:
+            if let draftId = email.draftId {
+                try await apiClient.deleteDraft(draftId: draftId, accountId: email.accountId)
+            } else {
+                try await apiClient.trashEmail(id: email.id, accountId: email.accountId)
+            }
+        case .archive:
+            try await apiClient.archiveEmail(id: email.id, accountId: email.accountId)
+        case .markRead:
+            try await apiClient.markEmailRead(id: email.id, accountId: email.accountId)
+        case .markUnread:
+            try await apiClient.markEmailUnread(id: email.id, accountId: email.accountId)
+        case .star:
+            try await apiClient.starEmail(id: email.id, accountId: email.accountId)
+        case .unstar:
+            try await apiClient.unstarEmail(id: email.id, accountId: email.accountId)
+        }
+    }
+
+    private func applyBulkAction(_ action: BulkEmailAction, to ids: Set<Email.ID>) {
+        switch action {
+        case .trash, .archive:
+            emails.removeAll { ids.contains($0.id) }
+        case .markRead:
+            for index in emails.indices where ids.contains(emails[index].id) {
+                emails[index].isRead = true
+            }
+        case .markUnread:
+            for index in emails.indices where ids.contains(emails[index].id) {
+                emails[index].isRead = false
+            }
+        case .star:
+            for index in emails.indices where ids.contains(emails[index].id) {
+                emails[index].isStarred = true
+            }
+        case .unstar:
+            for index in emails.indices where ids.contains(emails[index].id) {
+                emails[index].isStarred = false
+            }
+        }
     }
 
     private func startRealtimeSync() async {
@@ -861,6 +964,37 @@ private struct GreetingBlock: View {
 
 // MARK: - Email List
 
+private enum BulkEmailAction: String, CaseIterable {
+    case archive
+    case trash
+    case markRead
+    case markUnread
+    case star
+    case unstar
+
+    var title: String {
+        switch self {
+        case .archive: return "Archive"
+        case .trash: return "Trash"
+        case .markRead: return "Read"
+        case .markUnread: return "Unread"
+        case .star: return "Star"
+        case .unstar: return "Unstar"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .archive: return "archivebox"
+        case .trash: return "trash"
+        case .markRead: return "envelope.open"
+        case .markUnread: return "envelope.badge"
+        case .star: return "star"
+        case .unstar: return "star.slash"
+        }
+    }
+}
+
 private struct EmailListSection: View {
     let emails: [Email]
     let isLoading: Bool
@@ -868,8 +1002,18 @@ private struct EmailListSection: View {
     let isLoadingMore: Bool
     let canLoadMore: Bool
     let errorMessage: String?
+    let selectedEmailIds: Set<Email.ID>
+    let isSelectionMode: Bool
+    let isPerformingBulkAction: Bool
+    let selectedFolder: MailboxFolder
+    let onSetSelectionMode: (Bool) -> Void
+    let onSelectAll: () -> Void
+    let onToggleSelection: (Email) -> Void
+    let onBulkAction: (BulkEmailAction) -> Void
     let onSelect: (Email) -> Void
     let onLoadMore: () -> Void
+
+    private var selectedCount: Int { selectedEmailIds.count }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -878,6 +1022,10 @@ private struct EmailListSection: View {
                     .font(.system(size: 13))
                     .foregroundStyle(Theme.Palette.warm)
                     .padding(.horizontal, 4)
+            }
+
+            if !emails.isEmpty {
+                selectionToolbar
             }
 
             if isSearchLoading {
@@ -892,11 +1040,29 @@ private struct EmailListSection: View {
                 LazyVStack(spacing: 12) {
                     ForEach(emails) { email in
                         Button {
-                            onSelect(email)
+                            if isSelectionMode {
+                                onToggleSelection(email)
+                            } else {
+                                onSelect(email)
+                            }
                         } label: {
-                            EmailRowView(email: email)
+                            EmailRowView(
+                                email: email,
+                                isSelectionMode: isSelectionMode,
+                                isSelected: selectedEmailIds.contains(email.id),
+                                onToggleSelection: {
+                                    onToggleSelection(email)
+                                }
+                            )
                         }
                         .buttonStyle(.plain)
+                        .contextMenu {
+                            Button {
+                                onToggleSelection(email)
+                            } label: {
+                                Label(selectedEmailIds.contains(email.id) ? "Deselect" : "Select", systemImage: "checkmark.circle")
+                            }
+                        }
                     }
 
                     if canLoadMore {
@@ -912,6 +1078,95 @@ private struct EmailListSection: View {
                 }
             }
         }
+    }
+
+    private var selectionToolbar: some View {
+        ScrollView(.horizontal) {
+            HStack(spacing: 10) {
+                Button {
+                    onSetSelectionMode(!isSelectionMode)
+                } label: {
+                    Label(isSelectionMode ? "Cancel" : "Select", systemImage: isSelectionMode ? "xmark" : "checkmark.circle")
+                }
+                .buttonStyle(BulkActionButtonStyle())
+
+                if isSelectionMode {
+                    Button {
+                        onSelectAll()
+                    } label: {
+                        Label("Select All", systemImage: "checkmark.circle.fill")
+                    }
+                    .buttonStyle(BulkActionButtonStyle())
+
+                    Text("\(selectedCount) selected")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Theme.Palette.textSecondary)
+                        .frame(minWidth: 70, alignment: .leading)
+
+                    bulkActionButton(.archive)
+                        .disabled(selectedFolder == .drafts || selectedFolder == .sent || selectedCount == 0)
+                    bulkActionButton(.trash)
+                        .disabled(selectedCount == 0)
+                    bulkActionButton(.markRead)
+                        .disabled(selectedFolder == .drafts || selectedCount == 0)
+                    bulkActionButton(.markUnread)
+                        .disabled(selectedFolder == .drafts || selectedCount == 0)
+
+                    Menu {
+                        Button {
+                            onBulkAction(.star)
+                        } label: {
+                            Label("Star", systemImage: "star")
+                        }
+                        Button {
+                            onBulkAction(.unstar)
+                        } label: {
+                            Label("Unstar", systemImage: "star.slash")
+                        }
+                    } label: {
+                        Image(systemName: isPerformingBulkAction ? "hourglass" : "ellipsis")
+                            .font(.system(size: 15, weight: .semibold))
+                            .frame(width: 36, height: 32)
+                    }
+                    .buttonStyle(BulkActionButtonStyle())
+                    .disabled(selectedFolder == .drafts || selectedCount == 0 || isPerformingBulkAction)
+                }
+            }
+        }
+        .padding(.horizontal, 4)
+        .scrollIndicators(.hidden)
+        .animation(.snappy(duration: 0.18), value: isSelectionMode)
+        .animation(.snappy(duration: 0.18), value: selectedCount)
+    }
+
+    private func bulkActionButton(_ action: BulkEmailAction) -> some View {
+        Button {
+            onBulkAction(action)
+        } label: {
+            Label(action.title, systemImage: action.systemImage)
+                .labelStyle(.iconOnly)
+                .frame(width: 36, height: 32)
+        }
+        .buttonStyle(BulkActionButtonStyle())
+        .disabled(selectedCount == 0 || isPerformingBulkAction)
+    }
+}
+
+private struct BulkActionButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(Theme.Palette.textPrimary)
+            .padding(.horizontal, 10)
+            .frame(minHeight: 32)
+            .background(
+                Capsule()
+                    .fill(Theme.Palette.surface.opacity(configuration.isPressed ? 0.95 : 0.64))
+            )
+            .overlay(
+                Capsule()
+                    .strokeBorder(Theme.Palette.border, lineWidth: 1)
+            )
     }
 }
 
@@ -940,9 +1195,22 @@ private struct SearchLoadingView: View {
 
 private struct EmailRowView: View {
     let email: Email
+    var isSelectionMode = false
+    var isSelected = false
+    var onToggleSelection: () -> Void = {}
 
     var body: some View {
         HStack(alignment: .top, spacing: 14) {
+            if isSelectionMode {
+                Button(action: onToggleSelection) {
+                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                        .font(.system(size: 22, weight: .semibold))
+                        .foregroundStyle(isSelected ? Theme.Palette.accent : Theme.Palette.textTertiary)
+                        .frame(width: 28, height: 38)
+                }
+                .buttonStyle(.plain)
+            }
+
             SenderLogoView(email: email, size: 38)
 
             VStack(alignment: .leading, spacing: 4) {
@@ -953,9 +1221,11 @@ private struct EmailRowView: View {
 
                     Spacer()
 
-                    Text(email.receivedAt, style: .time)
+                    Text(email.receivedAt.emailRowDateText)
                         .font(.system(size: 12))
                         .foregroundStyle(Theme.Palette.textTertiary)
+                        .multilineTextAlignment(.trailing)
+                        .lineLimit(2)
                 }
 
                 Text(email.subject)
@@ -996,8 +1266,11 @@ private struct EmailRowView: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: Theme.Radius.row, style: .continuous)
-                .strokeBorder(Theme.Palette.border, lineWidth: 1)
+                .strokeBorder(isSelected ? Theme.Palette.accent.opacity(0.75) : Theme.Palette.border, lineWidth: isSelected ? 1.5 : 1)
         )
+        .onLongPressGesture {
+            onToggleSelection()
+        }
     }
 }
 
