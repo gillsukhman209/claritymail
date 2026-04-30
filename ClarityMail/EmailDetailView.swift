@@ -40,11 +40,10 @@ struct EmailDetailView: View {
                             .foregroundStyle(Theme.Palette.warm)
                     }
 
-                    Text(visibleEmail.body ?? visibleEmail.snippet)
-                        .font(.system(size: 15))
-                        .foregroundStyle(Theme.Palette.textPrimary.opacity(0.9))
-                        .lineSpacing(4)
-                        .textSelection(.enabled)
+                    EmailHTMLView(
+                        html: visibleEmail.htmlBody,
+                        plainText: visibleEmail.body ?? visibleEmail.snippet
+                    )
 
                     if isLoading && loadedEmail == nil {
                         ProgressView()

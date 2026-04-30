@@ -191,7 +191,8 @@ export async function getEmail(account: GmailAccount, id: string) {
     receivedAt: new Date(Number(data.internalDate ?? Date.now())).toISOString(),
     isRead: !labelIds.includes("UNREAD"),
     isStarred: labelIds.includes("STARRED"),
-    body
+    body,
+    htmlBody: html?.trim() || null
   };
 }
 

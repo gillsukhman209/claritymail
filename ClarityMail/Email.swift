@@ -19,6 +19,7 @@ struct Email: Identifiable, Hashable, Codable {
     var isRead: Bool
     var isStarred: Bool
     var body: String?
+    var htmlBody: String?
 
     var senderEmailAddress: String {
         if let start = sender.lastIndex(of: "<"),
@@ -42,5 +43,6 @@ struct Email: Identifiable, Hashable, Codable {
         case isRead
         case isStarred
         case body
+        case htmlBody
     }
 }

@@ -20,7 +20,8 @@ extension Email {
             receivedAt: .now,
             isRead: false,
             isStarred: false,
-            body: "Your Gmail inbox and AI tools will appear here once Google auth is connected."
+            body: "Your Gmail inbox and AI tools will appear here once Google auth is connected.",
+            htmlBody: nil
         ),
         Email(
             accountId: nil,
@@ -33,7 +34,8 @@ extension Email {
             receivedAt: .now.addingTimeInterval(-3600),
             isRead: true,
             isStarred: true,
-            body: "Important emails, action items, and reply suggestions will be summarized here."
+            body: "Important emails, action items, and reply suggestions will be summarized here.",
+            htmlBody: nil
         )
     ]
 }
