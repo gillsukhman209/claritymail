@@ -1604,11 +1604,13 @@ private struct SwipeableEmailRow<Content: View>: View {
 
     private var swipeBackground: some View {
         HStack(spacing: 0) {
-            ForEach(leadingActions) { actionButton($0) }
-
-            Spacer(minLength: 0)
-
-            ForEach(trailingActions.reversed()) { actionButton($0) }
+            if currentOffset > 1 {
+                ForEach(leadingActions) { actionButton($0) }
+                Spacer(minLength: 0)
+            } else if currentOffset < -1 {
+                Spacer(minLength: 0)
+                ForEach(trailingActions.reversed()) { actionButton($0) }
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.Palette.surface.opacity(0.65))
