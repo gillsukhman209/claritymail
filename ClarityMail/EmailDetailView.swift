@@ -126,6 +126,13 @@ struct EmailDetailView: View {
                     .keyboardShortcut("l", modifiers: [.command])
 
                     Button {
+                        Task { await togglePin() }
+                    } label: {
+                        Label(visibleEmail.isPinned == true ? "Unpin" : "Pin",
+                              systemImage: visibleEmail.isPinned == true ? "pin.slash" : "pin")
+                    }
+
+                    Button {
                         Task { await toggleRead() }
                     } label: {
                         Label(visibleEmail.isRead ? "Mark Unread" : "Mark Read",
@@ -219,6 +226,16 @@ struct EmailDetailView: View {
                 primary: toDisplayText,
                 secondary: receivedAccountText
             )
+
+            if let cc = visibleEmail.cc?.trimmingCharacters(in: .whitespacesAndNewlines), !cc.isEmpty {
+                Divider().overlay(Theme.Palette.border)
+                DeliveryDetailRow(title: "Cc", primary: cc, secondary: nil)
+            }
+
+            if let bcc = visibleEmail.bcc?.trimmingCharacters(in: .whitespacesAndNewlines), !bcc.isEmpty {
+                Divider().overlay(Theme.Palette.border)
+                DeliveryDetailRow(title: "Bcc", primary: bcc, secondary: nil)
+            }
         }
         .padding(14)
         .background(
@@ -426,6 +443,23 @@ struct EmailDetailView: View {
         } else {
             loadedEmail = email
             loadedEmail?.isStarred.toggle()
+        }
+    }
+
+    private func togglePin() async {
+        await performAction {
+            if visibleEmail.isPinned == true {
+                try await apiClient.unpinEmail(id: visibleEmail.id, accountId: accountId)
+            } else {
+                try await apiClient.pinEmail(id: visibleEmail.id, accountId: accountId)
+            }
+        }
+
+        if loadedEmail != nil {
+            loadedEmail?.isPinned = !(visibleEmail.isPinned == true)
+        } else {
+            loadedEmail = email
+            loadedEmail?.isPinned = !(email.isPinned == true)
         }
     }
 

@@ -14,6 +14,12 @@ import {
   listImportantSenders,
   saveImportantSender
 } from "../db/importantSenders.repo.js";
+import { deletePinnedEmail, listPinnedEmailIds, savePinnedEmail } from "../db/pinnedEmails.repo.js";
+import {
+  listDueScheduledEmails,
+  saveScheduledEmail,
+  updateScheduledEmailStatus
+} from "../db/scheduledEmails.repo.js";
 import {
   archiveEmail,
   blockSenderInGmail,
@@ -88,6 +94,23 @@ function validateSendBody(
   return true;
 }
 
+async function addPinnedState(accountId: string, emails: any[]) {
+  const pinnedEmailIds = await listPinnedEmailIds(accountId);
+  return emails.map((email) => ({
+    ...email,
+    isPinned: pinnedEmailIds.has(email.id)
+  }));
+}
+
+function sortPinnedNewestFirst<T extends { receivedAt: string; isPinned?: boolean }>(emails: T[]) {
+  return emails.sort((left, right) => {
+    if (Boolean(left.isPinned) !== Boolean(right.isPinned)) {
+      return left.isPinned ? -1 : 1;
+    }
+    return Date.parse(right.receivedAt) - Date.parse(left.receivedAt);
+  });
+}
+
 async function requireSelectedAccount(request: import("express").Request, response: import("express").Response) {
   const body = request.body as { accountId?: unknown } | undefined;
   const accountId =
@@ -128,9 +151,10 @@ emailRoutes.get("/emails", async (request, response, next) => {
       const emailsWithPriority = priorityOnly
         ? await enrichEmailsWithPriority(account.id ?? accountId, blockedFilteredEmails, importantSenderEmails)
         : applyImportantSenderPriority(blockedFilteredEmails, importantSenderEmails);
+      const emailsWithPinnedState = await addPinnedState(account.id ?? accountId, emailsWithPriority);
       const emails = priorityOnly
-        ? sortPriorityEmails(emailsWithPriority.filter((email: any) => email.priorityStatus === "important"))
-        : sortNewestFirst(emailsWithPriority);
+        ? sortPriorityEmails(emailsWithPinnedState.filter((email: any) => email.priorityStatus === "important"))
+        : sortPinnedNewestFirst(emailsWithPinnedState);
 
       response.json({
         emails,
@@ -156,11 +180,12 @@ emailRoutes.get("/emails", async (request, response, next) => {
         const emailsWithPriority = priorityOnly
           ? await enrichEmailsWithPriority(account.id ?? accountSummary.id, blockedFilteredEmails, importantSenderEmails)
           : applyImportantSenderPriority(blockedFilteredEmails, importantSenderEmails);
+        const emailsWithPinnedState = await addPinnedState(account.id ?? accountSummary.id, emailsWithPriority);
 
         return {
           emails: priorityOnly
-            ? emailsWithPriority.filter((email: any) => email.priorityStatus === "important")
-            : emailsWithPriority,
+            ? emailsWithPinnedState.filter((email: any) => email.priorityStatus === "important")
+            : emailsWithPinnedState,
           accountId: accountSummary.id,
           nextPageToken: result.nextPageToken
         };
@@ -169,7 +194,7 @@ emailRoutes.get("/emails", async (request, response, next) => {
 
     const emails = (priorityOnly
       ? sortPriorityEmails(emailGroups.flatMap((group) => group.emails))
-      : sortNewestFirst(emailGroups.flatMap((group) => group.emails))
+      : sortPinnedNewestFirst(emailGroups.flatMap((group) => group.emails))
     ).slice(0, 50);
 
     response.json({
@@ -210,7 +235,7 @@ emailRoutes.get("/emails/:id", async (request, response, next) => {
     const account = await requireSelectedAccount(request, response);
     if (!account) return;
 
-    const email = await getEmail(account, request.params.id);
+    const [email] = await addPinnedState(account.id ?? "", [await getEmail(account, request.params.id)]);
     response.json({ email });
   } catch (error) {
     next(error);
@@ -222,7 +247,7 @@ emailRoutes.get("/threads/:threadId", async (request, response, next) => {
     const account = await requireSelectedAccount(request, response);
     if (!account) return;
 
-    response.json({ emails: await getThread(account, request.params.threadId) });
+    response.json({ emails: await addPinnedState(account.id ?? "", await getThread(account, request.params.threadId)) });
   } catch (error) {
     next(error);
   }
@@ -252,13 +277,59 @@ emailRoutes.post("/emails/:id/archive", async (request, response, next) => {
   }
 });
 
+emailRoutes.post("/emails/:id/pin", async (request, response, next) => {
+  try {
+    const account = await requireSelectedAccount(request, response);
+    if (!account) return;
+
+    if (!account.id || !account.email) {
+      response.status(400).json({ error: "Connected Gmail account is missing account metadata." });
+      return;
+    }
+
+    const email = await getEmail(account, request.params.id);
+    await savePinnedEmail({
+      accountId: account.id,
+      accountEmail: account.email,
+      emailId: email.id,
+      threadId: email.threadId,
+      subject: email.subject,
+      sender: email.sender,
+      receivedAt: email.receivedAt
+    });
+
+    response.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+emailRoutes.delete("/emails/:id/pin", async (request, response, next) => {
+  try {
+    const account = await requireSelectedAccount(request, response);
+    if (!account) return;
+
+    if (!account.id) {
+      response.status(400).json({ error: "Connected Gmail account is missing account metadata." });
+      return;
+    }
+
+    await deletePinnedEmail({ accountId: account.id, emailId: request.params.id });
+    response.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
 emailRoutes.post("/send", async (request, response, next) => {
   try {
     const account = await requireSelectedAccount(request, response);
     if (!account) return;
 
-    const { to, subject, body, htmlBody, attachments } = request.body as {
+    const { to, cc, bcc, subject, body, htmlBody, attachments } = request.body as {
       to?: string;
+      cc?: string;
+      bcc?: string;
       subject?: string;
       body?: string;
       htmlBody?: string;
@@ -267,8 +338,60 @@ emailRoutes.post("/send", async (request, response, next) => {
 
     if (!validateSendBody(response, { to, body, htmlBody, attachments })) return;
 
-    const result = await sendEmail(account, { to: to!, subject, body: body ?? "", htmlBody, attachments });
+    const result = await sendEmail(account, { to: to!, cc, bcc, subject, body: body ?? "", htmlBody, attachments });
     response.json({ ok: true, message: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+emailRoutes.post("/send-later", async (request, response, next) => {
+  try {
+    const account = await requireSelectedAccount(request, response);
+    if (!account) return;
+
+    if (!account.id || !account.email) {
+      response.status(400).json({ error: "Connected Gmail account is missing account metadata." });
+      return;
+    }
+
+    const { to, cc, bcc, subject, body, htmlBody, attachments, threadId, sendAt } = request.body as {
+      to?: string;
+      cc?: string;
+      bcc?: string;
+      subject?: string;
+      body?: string;
+      htmlBody?: string;
+      attachments?: EmailAttachment[];
+      threadId?: string;
+      sendAt?: string;
+    };
+
+    if (!validateSendBody(response, { to, body, htmlBody, attachments })) return;
+
+    const scheduledAt = sendAt ? new Date(sendAt) : null;
+    if (!scheduledAt || Number.isNaN(scheduledAt.getTime()) || scheduledAt.getTime() <= Date.now()) {
+      response.status(400).json({ error: "Send later time must be in the future." });
+      return;
+    }
+
+    const scheduledEmail = await saveScheduledEmail({
+      accountId: account.id,
+      accountEmail: account.email,
+      sendAt: scheduledAt,
+      payload: {
+        to: to!,
+        cc,
+        bcc,
+        subject,
+        body: body ?? "",
+        htmlBody,
+        attachments,
+        threadId
+      }
+    });
+
+    response.json({ ok: true, scheduledEmail });
   } catch (error) {
     next(error);
   }
@@ -279,8 +402,10 @@ emailRoutes.post("/reply", async (request, response, next) => {
     const account = await requireSelectedAccount(request, response);
     if (!account) return;
 
-    const { to, subject, body, htmlBody, threadId, attachments } = request.body as {
+    const { to, cc, bcc, subject, body, htmlBody, threadId, attachments } = request.body as {
       to?: string;
+      cc?: string;
+      bcc?: string;
       subject?: string;
       body?: string;
       htmlBody?: string;
@@ -294,7 +419,7 @@ emailRoutes.post("/reply", async (request, response, next) => {
     }
     if (!validateSendBody(response, { to, body, htmlBody, attachments })) return;
 
-    const result = await replyToEmail(account, { to, subject, body: body ?? "", htmlBody, threadId, attachments });
+    const result = await replyToEmail(account, { to, cc, bcc, subject, body: body ?? "", htmlBody, threadId, attachments });
     response.json({ ok: true, message: result });
   } catch (error) {
     next(error);
@@ -306,8 +431,10 @@ emailRoutes.post("/drafts", async (request, response, next) => {
     const account = await requireSelectedAccount(request, response);
     if (!account) return;
 
-    const { to, subject, body, htmlBody, attachments, threadId } = request.body as {
+    const { to, cc, bcc, subject, body, htmlBody, attachments, threadId } = request.body as {
       to?: string;
+      cc?: string;
+      bcc?: string;
       subject?: string;
       body?: string;
       htmlBody?: string;
@@ -322,6 +449,8 @@ emailRoutes.post("/drafts", async (request, response, next) => {
 
     const draft = await createDraft(account, {
       to: to ?? "",
+      cc,
+      bcc,
       subject: subject ?? "",
       body: body ?? "",
       htmlBody,
@@ -339,8 +468,10 @@ emailRoutes.put("/drafts/:draftId", async (request, response, next) => {
     const account = await requireSelectedAccount(request, response);
     if (!account) return;
 
-    const { to, subject, body, htmlBody, attachments, threadId } = request.body as {
+    const { to, cc, bcc, subject, body, htmlBody, attachments, threadId } = request.body as {
       to?: string;
+      cc?: string;
+      bcc?: string;
       subject?: string;
       body?: string;
       htmlBody?: string;
@@ -355,6 +486,8 @@ emailRoutes.put("/drafts/:draftId", async (request, response, next) => {
 
     const draft = await updateDraft(account, request.params.draftId, {
       to: to ?? "",
+      cc,
+      bcc,
       subject: subject ?? "",
       body: body ?? "",
       htmlBody,
@@ -372,8 +505,10 @@ emailRoutes.post("/drafts/:draftId/send", async (request, response, next) => {
     const account = await requireSelectedAccount(request, response);
     if (!account) return;
 
-    const { to, subject, body, htmlBody, attachments, threadId } = request.body as {
+    const { to, cc, bcc, subject, body, htmlBody, attachments, threadId } = request.body as {
       to?: string;
+      cc?: string;
+      bcc?: string;
       subject?: string;
       body?: string;
       htmlBody?: string;
@@ -385,6 +520,8 @@ emailRoutes.post("/drafts/:draftId/send", async (request, response, next) => {
 
     const result = await sendDraft(account, request.params.draftId, {
       to: to ?? "",
+      cc,
+      bcc,
       subject: subject ?? "",
       body: body ?? "",
       htmlBody,
@@ -579,6 +716,66 @@ emailRoutes.post("/emails/:id/unstar", async (request, response, next) => {
 
     await unstarEmail(account, request.params.id);
     response.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+async function processDueScheduledEmails() {
+  const dueEmails = await listDueScheduledEmails();
+  const results = [];
+
+  for (const scheduledEmail of dueEmails) {
+    try {
+      await updateScheduledEmailStatus(scheduledEmail.id, "sending");
+      const account = await getGoogleAccountById(scheduledEmail.accountId);
+      if (!account) {
+        throw new Error("Scheduled email account is no longer connected.");
+      }
+
+      if (scheduledEmail.payload.threadId) {
+        await replyToEmail(account, {
+          ...scheduledEmail.payload,
+          threadId: scheduledEmail.payload.threadId
+        });
+      } else {
+        await sendEmail(account, scheduledEmail.payload);
+      }
+
+      await updateScheduledEmailStatus(scheduledEmail.id, "sent");
+      results.push({ id: scheduledEmail.id, ok: true });
+    } catch (error) {
+      await updateScheduledEmailStatus(
+        scheduledEmail.id,
+        "failed",
+        error instanceof Error ? error.message : "Unknown send later failure."
+      );
+      results.push({ id: scheduledEmail.id, ok: false });
+    }
+  }
+
+  return { processed: results.length, results };
+}
+
+emailRoutes.post("/send-later/process-due", async (_request, response, next) => {
+  try {
+    const result = await processDueScheduledEmails();
+    response.json({ ok: true, ...result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+emailRoutes.get("/cron/send-later", async (request, response, next) => {
+  try {
+    const expectedSecret = process.env.CRON_SECRET;
+    if (expectedSecret && request.query.secret !== expectedSecret && request.headers.authorization !== `Bearer ${expectedSecret}`) {
+      response.status(401).json({ error: "Invalid cron secret." });
+      return;
+    }
+
+    const result = await processDueScheduledEmails();
+    response.json({ ok: true, ...result });
   } catch (error) {
     next(error);
   }

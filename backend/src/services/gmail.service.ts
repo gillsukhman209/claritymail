@@ -17,6 +17,8 @@ export type EmailAttachment = {
 
 type SendInput = {
   to: string;
+  cc?: string;
+  bcc?: string;
   subject?: string;
   body: string;
   htmlBody?: string;
@@ -89,12 +91,17 @@ function buildRawEmail(input: SendInput) {
   const hasHtml = Boolean(input.htmlBody);
   const bodyContentType = hasHtml ? "text/html" : "text/plain";
   const body = hasHtml ? input.htmlBody! : input.body;
+  const headers = [
+    `To: ${input.to}`,
+    input.cc?.trim() ? `Cc: ${input.cc}` : null,
+    input.bcc?.trim() ? `Bcc: ${input.bcc}` : null,
+    `Subject: ${encodeHeader(subject)}`,
+    "MIME-Version: 1.0"
+  ].filter((line): line is string => Boolean(line));
 
   if (attachments.length === 0) {
     const lines = [
-      `To: ${input.to}`,
-      `Subject: ${encodeHeader(subject)}`,
-      "MIME-Version: 1.0",
+      ...headers,
       `Content-Type: ${bodyContentType}; charset=utf-8`,
       "Content-Transfer-Encoding: 8bit",
       "",
@@ -106,9 +113,7 @@ function buildRawEmail(input: SendInput) {
 
   const boundary = `claritymail-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const lines = [
-    `To: ${input.to}`,
-    `Subject: ${encodeHeader(subject)}`,
-    "MIME-Version: 1.0",
+    ...headers,
     `Content-Type: multipart/mixed; boundary="${boundary}"`,
     "",
     `--${boundary}`,
@@ -313,6 +318,9 @@ function parseEmailFromMessage(account: GmailAccount, data: any) {
     threadId: data.threadId ?? "",
     subject: cleanText(headerValue(headers, "Subject") || "(No subject)"),
     sender: cleanText(headerValue(headers, "From") || headerValue(headers, "To") || "Unknown sender"),
+    to: cleanText(headerValue(headers, "To") || ""),
+    cc: cleanText(headerValue(headers, "Cc") || ""),
+    bcc: cleanText(headerValue(headers, "Bcc") || ""),
     snippet: cleanText(data.snippet ?? ""),
     receivedAt: new Date(Number(data.internalDate ?? Date.now())).toISOString(),
     isRead: !labelIds.includes("UNREAD"),
@@ -337,6 +345,8 @@ function parseFullEmailFromMessage(account: GmailAccount, data: any, draftId?: s
     subject: cleanText(headerValue(headers, "Subject") || "(No subject)"),
     sender: cleanText(headerValue(headers, "From") || headerValue(headers, "To") || "Unknown sender"),
     to: cleanText(headerValue(headers, "To") || ""),
+    cc: cleanText(headerValue(headers, "Cc") || ""),
+    bcc: cleanText(headerValue(headers, "Bcc") || ""),
     snippet: cleanText(data.snippet ?? ""),
     receivedAt: new Date(Number(data.internalDate ?? Date.now())).toISOString(),
     isRead: !labelIds.includes("UNREAD"),
@@ -767,6 +777,8 @@ export async function replyToEmail(account: GmailAccount, input: SendInput & { t
     requestBody: {
       raw: buildRawEmail({
         to: input.to,
+        cc: input.cc,
+        bcc: input.bcc,
         subject,
         body: input.body,
         htmlBody: input.htmlBody,

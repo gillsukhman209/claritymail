@@ -107,6 +107,9 @@ struct MailboxView: View {
                             onBulkAction: { action in
                                 Task { await performBulkAction(action) }
                             },
+                            onEmailAction: { action, email in
+                                Task { await performSingleAction(action, email: email) }
+                            },
                             onSelect: { email in
                                 if selectedFolder == .drafts || email.draftId != nil {
                                     draftToEdit = email
@@ -197,6 +200,7 @@ struct MailboxView: View {
             .task {
                 await NotificationManager.shared.requestAuthorization()
                 await loadAccounts()
+                await processDueScheduledEmails()
                 await loadEmails()
                 await refreshSyncStatus()
                 await startRealtimeSync()
@@ -244,6 +248,7 @@ struct MailboxView: View {
             .onChange(of: scenePhase) {
                 guard scenePhase == .active else { return }
                 Task {
+                    await processDueScheduledEmails()
                     await refreshSyncStatus()
                     await loadEmails(notifyForNewEmails: false)
                     openPendingNotificationEmailIfNeeded()
@@ -505,6 +510,20 @@ struct MailboxView: View {
         }
     }
 
+    private func performSingleAction(_ action: BulkEmailAction, email: Email) async {
+        guard !isPerformingBulkAction else { return }
+        isPerformingBulkAction = true
+        defer { isPerformingBulkAction = false }
+
+        do {
+            try await perform(action, email: email)
+            applyBulkAction(action, to: [email.id])
+            errorMessage = nil
+        } catch {
+            errorMessage = "Could not update email."
+        }
+    }
+
     private func perform(_ action: BulkEmailAction, email: Email) async throws {
         switch action {
         case .trash:
@@ -523,6 +542,10 @@ struct MailboxView: View {
             try await apiClient.starEmail(id: email.id, accountId: email.accountId)
         case .unstar:
             try await apiClient.unstarEmail(id: email.id, accountId: email.accountId)
+        case .pin:
+            try await apiClient.pinEmail(id: email.id, accountId: email.accountId)
+        case .unpin:
+            try await apiClient.unpinEmail(id: email.id, accountId: email.accountId)
         }
     }
 
@@ -546,6 +569,25 @@ struct MailboxView: View {
             for index in emails.indices where ids.contains(emails[index].id) {
                 emails[index].isStarred = false
             }
+        case .pin:
+            for index in emails.indices where ids.contains(emails[index].id) {
+                emails[index].isPinned = true
+            }
+            emails = sortPinnedEmails(emails)
+        case .unpin:
+            for index in emails.indices where ids.contains(emails[index].id) {
+                emails[index].isPinned = false
+            }
+            emails = sortPinnedEmails(emails)
+        }
+    }
+
+    private func sortPinnedEmails(_ emails: [Email]) -> [Email] {
+        emails.sorted {
+            if ($0.isPinned == true) != ($1.isPinned == true) {
+                return $0.isPinned == true
+            }
+            return $0.receivedAt > $1.receivedAt
         }
     }
 
@@ -563,6 +605,7 @@ struct MailboxView: View {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(20))
                 if Task.isCancelled { return }
+                await processDueScheduledEmails()
             guard selectedFolder == .inbox,
                   searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                   !isLoading,
@@ -572,6 +615,14 @@ struct MailboxView: View {
                 await refreshSyncStatus()
                 await loadEmails(notifyForNewEmails: false)
             }
+        }
+    }
+
+    private func processDueScheduledEmails() async {
+        do {
+            try await apiClient.processDueScheduledEmails()
+        } catch {
+            // Scheduled send processing should not block inbox refresh.
         }
     }
 
@@ -1200,6 +1251,8 @@ private enum BulkEmailAction: String, CaseIterable {
     case markUnread
     case star
     case unstar
+    case pin
+    case unpin
 
     var title: String {
         switch self {
@@ -1209,6 +1262,8 @@ private enum BulkEmailAction: String, CaseIterable {
         case .markUnread: return "Unread"
         case .star: return "Star"
         case .unstar: return "Unstar"
+        case .pin: return "Pin"
+        case .unpin: return "Unpin"
         }
     }
 
@@ -1220,6 +1275,8 @@ private enum BulkEmailAction: String, CaseIterable {
         case .markUnread: return "envelope.badge"
         case .star: return "star"
         case .unstar: return "star.slash"
+        case .pin: return "pin"
+        case .unpin: return "pin.slash"
         }
     }
 }
@@ -1240,6 +1297,7 @@ private struct EmailListSection: View {
     let onSelectAll: () -> Void
     let onToggleSelection: (Email) -> Void
     let onBulkAction: (BulkEmailAction) -> Void
+    let onEmailAction: (BulkEmailAction, Email) -> Void
     let onSelect: (Email) -> Void
     let onLoadMore: () -> Void
 
@@ -1269,13 +1327,18 @@ private struct EmailListSection: View {
             } else {
                 LazyVStack(spacing: 12) {
                     ForEach(emails) { email in
-                        Button {
-                            if isSelectionMode {
-                                onToggleSelection(email)
-                            } else {
-                                onSelect(email)
+                        SwipeableEmailRow(
+                            isEnabled: !isSelectionMode,
+                            leadingActions: leadingSwipeActions(for: email),
+                            trailingActions: trailingSwipeActions(for: email),
+                            onTap: {
+                                if isSelectionMode {
+                                    onToggleSelection(email)
+                                } else {
+                                    onSelect(email)
+                                }
                             }
-                        } label: {
+                        ) {
                             EmailRowView(
                                 email: email,
                                 showPriorityLabel: isPriorityMode || email.isManualPrioritySender,
@@ -1286,12 +1349,16 @@ private struct EmailListSection: View {
                                 }
                             )
                         }
-                        .buttonStyle(.plain)
                         .contextMenu {
                             Button {
                                 onToggleSelection(email)
                             } label: {
                                 Label(selectedEmailIds.contains(email.id) ? "Deselect" : "Select", systemImage: "checkmark.circle")
+                            }
+                            Button {
+                                onEmailAction(email.isPinned == true ? .unpin : .pin, email)
+                            } label: {
+                                Label(email.isPinned == true ? "Unpin" : "Pin", systemImage: email.isPinned == true ? "pin.slash" : "pin")
                             }
                         }
                     }
@@ -1354,6 +1421,16 @@ private struct EmailListSection: View {
                         } label: {
                             Label("Unstar", systemImage: "star.slash")
                         }
+                        Button {
+                            onBulkAction(.pin)
+                        } label: {
+                            Label("Pin", systemImage: "pin")
+                        }
+                        Button {
+                            onBulkAction(.unpin)
+                        } label: {
+                            Label("Unpin", systemImage: "pin.slash")
+                        }
                     } label: {
                         Image(systemName: isPerformingBulkAction ? "hourglass" : "ellipsis")
                             .font(.system(size: 15, weight: .semibold))
@@ -1381,6 +1458,55 @@ private struct EmailListSection: View {
         .buttonStyle(BulkActionButtonStyle())
         .disabled(selectedCount == 0 || isPerformingBulkAction)
     }
+
+    private func leadingSwipeActions(for email: Email) -> [RowSwipeAction] {
+        guard selectedFolder != .drafts else { return [] }
+
+        return [
+            RowSwipeAction(
+                id: email.isPinned == true ? "unpin" : "pin",
+                title: email.isPinned == true ? "Unpin" : "Pin",
+                systemImage: email.isPinned == true ? "pin.slash" : "pin",
+                tint: Theme.Palette.warm,
+                action: { onEmailAction(email.isPinned == true ? .unpin : .pin, email) }
+            ),
+            RowSwipeAction(
+                id: email.isRead ? "unread" : "read",
+                title: email.isRead ? "Unread" : "Read",
+                systemImage: email.isRead ? "envelope.badge" : "envelope.open",
+                tint: Theme.Palette.accent,
+                action: { onEmailAction(email.isRead ? .markUnread : .markRead, email) }
+            )
+        ]
+    }
+
+    private func trailingSwipeActions(for email: Email) -> [RowSwipeAction] {
+        var actions: [RowSwipeAction] = []
+
+        if selectedFolder != .drafts && selectedFolder != .sent {
+            actions.append(
+                RowSwipeAction(
+                    id: "archive",
+                    title: "Archive",
+                    systemImage: "archivebox",
+                    tint: .blue,
+                    action: { onEmailAction(.archive, email) }
+                )
+            )
+        }
+
+        actions.append(
+            RowSwipeAction(
+                id: "trash",
+                title: email.draftId == nil ? "Trash" : "Delete",
+                systemImage: "trash",
+                tint: .red,
+                action: { onEmailAction(.trash, email) }
+            )
+        )
+
+        return actions
+    }
 }
 
 private struct BulkActionButtonStyle: ButtonStyle {
@@ -1398,6 +1524,157 @@ private struct BulkActionButtonStyle: ButtonStyle {
                 Capsule()
                     .strokeBorder(Theme.Palette.border, lineWidth: 1)
             )
+    }
+}
+
+private struct RowSwipeAction: Identifiable {
+    let id: String
+    let title: String
+    let systemImage: String
+    let tint: Color
+    let action: () -> Void
+}
+
+private struct SwipeableEmailRow<Content: View>: View {
+    let isEnabled: Bool
+    let leadingActions: [RowSwipeAction]
+    let trailingActions: [RowSwipeAction]
+    let onTap: () -> Void
+    private let content: () -> Content
+
+    @State private var settledOffset: CGFloat = 0
+    @GestureState private var dragOffset: CGFloat = 0
+
+    private let actionWidth: CGFloat = 78
+    private let revealThreshold: CGFloat = 54
+    private let fullSwipeThreshold: CGFloat = 132
+
+    init(
+        isEnabled: Bool,
+        leadingActions: [RowSwipeAction],
+        trailingActions: [RowSwipeAction],
+        onTap: @escaping () -> Void,
+        @ViewBuilder content: @escaping () -> Content
+    ) {
+        self.isEnabled = isEnabled
+        self.leadingActions = leadingActions
+        self.trailingActions = trailingActions
+        self.onTap = onTap
+        self.content = content
+    }
+
+    private var maxLeadingOffset: CGFloat {
+        CGFloat(leadingActions.count) * actionWidth
+    }
+
+    private var maxTrailingOffset: CGFloat {
+        CGFloat(trailingActions.count) * actionWidth
+    }
+
+    private var currentOffset: CGFloat {
+        clamped(settledOffset + dragOffset)
+    }
+
+    var body: some View {
+        ZStack {
+            swipeBackground
+                .opacity(abs(currentOffset) > 1 ? 1 : 0)
+
+            content()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .offset(x: isEnabled ? currentOffset : 0)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    if abs(settledOffset) > 1 {
+                        close()
+                    } else {
+                        onTap()
+                    }
+                }
+                .gesture(rowDragGesture)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.row, style: .continuous))
+        .animation(.snappy(duration: 0.18), value: settledOffset)
+        .onChange(of: isEnabled) { _, enabled in
+            if !enabled {
+                close()
+            }
+        }
+    }
+
+    private var swipeBackground: some View {
+        HStack(spacing: 0) {
+            ForEach(leadingActions) { actionButton($0) }
+
+            Spacer(minLength: 0)
+
+            ForEach(trailingActions.reversed()) { actionButton($0) }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Theme.Palette.surface.opacity(0.65))
+    }
+
+    private func actionButton(_ swipeAction: RowSwipeAction) -> some View {
+        Button {
+            swipeAction.action()
+            close()
+        } label: {
+            VStack(spacing: 5) {
+                Image(systemName: swipeAction.systemImage)
+                    .font(.system(size: 16, weight: .semibold))
+
+                Text(swipeAction.title)
+                    .font(.system(size: 11, weight: .semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+            .foregroundStyle(.white)
+            .frame(width: actionWidth)
+            .frame(maxHeight: .infinity)
+            .background(swipeAction.tint.opacity(0.92))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var rowDragGesture: some Gesture {
+        DragGesture(minimumDistance: 12, coordinateSpace: .local)
+            .updating($dragOffset) { value, state, _ in
+                guard isEnabled, isHorizontalDrag(value) else { return }
+                state = value.translation.width
+            }
+            .onEnded { value in
+                guard isEnabled, isHorizontalDrag(value) else { return }
+
+                let proposedOffset = clamped(settledOffset + value.translation.width)
+
+                if proposedOffset > fullSwipeThreshold, let action = leadingActions.first {
+                    action.action()
+                    close()
+                } else if proposedOffset < -fullSwipeThreshold, let action = trailingActions.first {
+                    action.action()
+                    close()
+                } else if proposedOffset > revealThreshold, !leadingActions.isEmpty {
+                    settledOffset = maxLeadingOffset
+                } else if proposedOffset < -revealThreshold, !trailingActions.isEmpty {
+                    settledOffset = -maxTrailingOffset
+                } else {
+                    close()
+                }
+            }
+    }
+
+    private func isHorizontalDrag(_ value: DragGesture.Value) -> Bool {
+        abs(value.translation.width) > abs(value.translation.height)
+    }
+
+    private func clamped(_ value: CGFloat) -> CGFloat {
+        min(max(value, -maxTrailingOffset), maxLeadingOffset)
+    }
+
+    private func close() {
+        withAnimation(.snappy(duration: 0.18)) {
+            settledOffset = 0
+        }
     }
 }
 
@@ -1465,6 +1742,20 @@ private struct EmailRowView: View {
                     .foregroundStyle(Theme.Palette.textPrimary)
                     .lineLimit(1)
 
+                if email.isPinned == true {
+                    HStack(spacing: 5) {
+                        Image(systemName: "pin.fill")
+                            .font(.system(size: 10, weight: .bold))
+                        Text("Pinned")
+                    }
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Theme.Palette.warm)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Theme.Palette.warm.opacity(0.12))
+                    .clipShape(Capsule())
+                }
+
                 if email.isPriority && showPriorityLabel {
                     HStack(spacing: 5) {
                         Image(systemName: email.isManualPrioritySender ? "bolt.fill" : "sparkles")
@@ -1500,6 +1791,7 @@ private struct EmailRowView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 14)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: Theme.Radius.row, style: .continuous)
                 .fill(email.isManualPrioritySender ? Theme.Palette.accent.opacity(0.08) : Theme.Palette.surface.opacity(0.6))

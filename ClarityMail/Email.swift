@@ -16,10 +16,13 @@ struct Email: Identifiable, Hashable, Codable {
     let subject: String
     let sender: String
     var to: String?
+    var cc: String? = nil
+    var bcc: String? = nil
     let snippet: String
     let receivedAt: Date
     var isRead: Bool
     var isStarred: Bool
+    var isPinned: Bool? = false
     var body: String?
     var htmlBody: String?
     var attachments: [EmailAttachment]?
@@ -143,10 +146,13 @@ struct Email: Identifiable, Hashable, Codable {
         case subject
         case sender
         case to
+        case cc
+        case bcc
         case snippet
         case receivedAt
         case isRead
         case isStarred
+        case isPinned
         case body
         case htmlBody
         case attachments
@@ -196,6 +202,8 @@ struct EmailContact: Identifiable, Hashable {
         for email in emails {
             contacts.append(EmailContact(email: email.senderEmailAddress, name: email.senderDisplayName))
             contacts.append(contentsOf: parseContacts(email.to))
+            contacts.append(contentsOf: parseContacts(email.cc))
+            contacts.append(contentsOf: parseContacts(email.bcc))
             if let accountEmail = email.accountEmail {
                 contacts.append(EmailContact(email: accountEmail, name: "Me"))
             }

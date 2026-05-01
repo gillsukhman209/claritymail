@@ -18,6 +18,8 @@ struct ComposerView: View {
 
     private enum FocusField {
         case to
+        case cc
+        case bcc
         case subject
         case body
     }
@@ -32,11 +34,16 @@ struct ComposerView: View {
     @State private var currentDraftId: String?
     @State private var draftThreadId: String?
     @State private var to = ""
+    @State private var cc = ""
+    @State private var bcc = ""
+    @State private var isShowingCcBcc = false
     @State private var subject = ""
     @State private var messageBody = ""
     @State private var forwardedHTMLBody: String?
     @State private var attachments: [ComposerAttachment] = []
     @State private var isShowingFileImporter = false
+    @State private var isShowingSendLaterSheet = false
+    @State private var scheduledSendDate = Date().addingTimeInterval(3600)
     @State private var isSending = false
     @State private var autosaveTask: Task<Void, Never>?
     @State private var lastSavedDraftFingerprint = ""
@@ -78,7 +85,7 @@ struct ComposerView: View {
 
     private var canSend: Bool {
         !isSending &&
-        !to.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+        !cleanedRecipients(to).isEmpty &&
         (!messageBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || forwardedHTMLBody != nil) &&
         attachmentBytes <= maxAttachmentBytes
     }
@@ -98,7 +105,7 @@ struct ComposerView: View {
 
     private var currentRecipientQuery: String {
         let separators = CharacterSet(charactersIn: ",;")
-        return to
+        return recipientText(for: focusedField)
             .components(separatedBy: separators)
             .last?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -107,7 +114,7 @@ struct ComposerView: View {
     private var selectedRecipientEmails: Set<String> {
         let separators = CharacterSet(charactersIn: ",;")
         return Set(
-            to.components(separatedBy: separators)
+            [to, cc, bcc].joined(separator: ",").components(separatedBy: separators)
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
                 .filter { $0.contains("@") && $0 != currentRecipientQuery.lowercased() }
         )
@@ -145,7 +152,7 @@ struct ComposerView: View {
     }
 
     private var shouldShowRecipientSuggestions: Bool {
-        focusedField == .to && !filteredRecipientSuggestions.isEmpty
+        (focusedField == .to || focusedField == .cc || focusedField == .bcc) && !filteredRecipientSuggestions.isEmpty
     }
 
     var body: some View {
@@ -174,19 +181,7 @@ struct ComposerView: View {
             .background(Theme.Palette.surfaceElevated.opacity(0.8))
 
             VStack(spacing: 0) {
-                HStack(spacing: 8) {
-                    Text("To")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(Theme.Palette.textTertiary)
-                        .frame(width: 54, alignment: .leading)
-
-                    TextField("name@example.com", text: $to)
-                        .textFieldStyle(.plain)
-                        .textContentType(.emailAddress)
-                        .focused($focusedField, equals: .to)
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
+                recipientRow("To", text: $to, focus: .to, showCcBccButton: !isShowingCcBcc)
 
                 if shouldShowRecipientSuggestions {
                     RecipientSuggestionList(
@@ -199,6 +194,16 @@ struct ComposerView: View {
                 }
 
                 Divider().overlay(Theme.Palette.border)
+
+                if isShowingCcBcc {
+                    recipientRow("Cc", text: $cc, focus: .cc)
+
+                    Divider().overlay(Theme.Palette.border)
+
+                    recipientRow("Bcc", text: $bcc, focus: .bcc)
+
+                    Divider().overlay(Theme.Palette.border)
+                }
 
                 HStack(spacing: 8) {
                     Text("Subject")
@@ -257,6 +262,16 @@ struct ComposerView: View {
                     .buttonStyle(.plain)
                     .foregroundStyle(Theme.Palette.textTertiary)
 
+                    Button {
+                        scheduledSendDate = defaultScheduledDate()
+                        isShowingSendLaterSheet = true
+                    } label: {
+                        Image(systemName: "clock")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Theme.Palette.textTertiary)
+                    .disabled(!canSend)
+
                     Spacer()
 
                     accountPicker
@@ -288,7 +303,7 @@ struct ComposerView: View {
             }
         }
         .frame(minWidth: 320, maxWidth: 520)
-        .frame(height: shouldShowRecipientSuggestions ? 500 : 430)
+        .frame(height: composerHeight)
         .background(Theme.Palette.surface)
         .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.row, style: .continuous))
         .overlay(
@@ -303,17 +318,71 @@ struct ComposerView: View {
         ) { result in
             handleFileImport(result)
         }
+        .sheet(isPresented: $isShowingSendLaterSheet) {
+            SendLaterSheet(
+                scheduledDate: $scheduledSendDate,
+                canSchedule: canSend && scheduledSendDate > Date(),
+                onSchedule: {
+                    Task { await sendLater() }
+                }
+            )
+            .presentationDetents([.height(260)])
+        }
         .onAppear {
             configureInitialValues()
             focusInitialField()
         }
         .onChange(of: to) { scheduleAutosave() }
+        .onChange(of: cc) { scheduleAutosave() }
+        .onChange(of: bcc) { scheduleAutosave() }
         .onChange(of: subject) { scheduleAutosave() }
         .onChange(of: messageBody) { scheduleAutosave() }
         .onChange(of: selectedAccountId) { scheduleAutosave() }
         .onDisappear {
             autosaveTask?.cancel()
         }
+    }
+
+    private var composerHeight: CGFloat {
+        var height: CGFloat = attachments.isEmpty ? 430 : 470
+        if shouldShowRecipientSuggestions {
+            height += 70
+        }
+        if isShowingCcBcc {
+            height += 92
+        }
+        return min(height, 560)
+    }
+
+    private func recipientRow(
+        _ label: String,
+        text: Binding<String>,
+        focus: FocusField,
+        showCcBccButton: Bool = false
+    ) -> some View {
+        HStack(spacing: 8) {
+            Text(label)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(Theme.Palette.textTertiary)
+                .frame(width: 54, alignment: .leading)
+
+            TextField("name@example.com", text: text)
+                .textFieldStyle(.plain)
+                .textContentType(.emailAddress)
+                .focused($focusedField, equals: focus)
+
+            if showCcBccButton {
+                Button("Cc/Bcc") {
+                    isShowingCcBcc = true
+                    focusedField = .cc
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Theme.Palette.accentSoft)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
     }
 
     private var attachmentList: some View {
@@ -397,24 +466,50 @@ struct ComposerView: View {
     }
 
     private func selectRecipientSuggestion(_ contact: EmailContact) {
+        guard let focusedField else { return }
         let separators = CharacterSet(charactersIn: ",;")
-        var parts = to.components(separatedBy: separators)
+        var currentText = recipientText(for: focusedField)
+        var parts = currentText.components(separatedBy: separators)
         if parts.isEmpty {
             parts = [contact.email]
         } else {
             parts[parts.count - 1] = " \(contact.email)"
         }
 
-        to = parts
+        currentText = parts
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
             .joined(separator: ", ")
 
-        if !to.hasSuffix(", ") {
-            to += ", "
+        if !currentText.hasSuffix(", ") {
+            currentText += ", "
         }
 
-        focusedField = .to
+        switch focusedField {
+        case .to:
+            to = currentText
+        case .cc:
+            cc = currentText
+        case .bcc:
+            bcc = currentText
+        case .subject, .body:
+            break
+        }
+
+        self.focusedField = focusedField
+    }
+
+    private func recipientText(for focus: FocusField?) -> String {
+        switch focus {
+        case .to:
+            return to
+        case .cc:
+            return cc
+        case .bcc:
+            return bcc
+        case .subject, .body, nil:
+            return ""
+        }
     }
 
     private func configureInitialValues() {
@@ -437,6 +532,10 @@ struct ComposerView: View {
             selectedAccountId = selectedAccountId ?? email.accountId
             draftThreadId = email.threadId
             to = email.to ?? ""
+            cc = email.cc ?? ""
+            bcc = email.bcc ?? ""
+            isShowingCcBcc = !cc.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                !bcc.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             subject = email.subject == "(No subject)" ? "" : email.subject
             messageBody = email.body ?? email.snippet
             lastSavedDraftFingerprint = draftFingerprint()
@@ -468,7 +567,9 @@ struct ComposerView: View {
         let selectedAccountId = selectedAccountId
         let currentDraftId = currentDraftId
         let draftThreadId = draftThreadId
-        let to = to
+        let to = cleanedRecipients(to)
+        let cc = cleanedOptionalRecipient(cc)
+        let bcc = cleanedOptionalRecipient(bcc)
         let subject = subject
         let body = messageBody
         let mode = mode
@@ -483,6 +584,8 @@ struct ComposerView: View {
                 case .compose, .forward:
                     try await apiClient.sendEmail(
                         to: to,
+                        cc: cc,
+                        bcc: bcc,
                         subject: subject,
                         body: body,
                         htmlBody: htmlBody,
@@ -497,6 +600,8 @@ struct ComposerView: View {
                         try await apiClient.sendDraft(
                             draftId: currentDraftId,
                             to: to,
+                            cc: cc,
+                            bcc: bcc,
                             subject: subject,
                             body: body,
                             htmlBody: htmlBody,
@@ -507,6 +612,8 @@ struct ComposerView: View {
                     } else {
                         try await apiClient.reply(
                             to: to,
+                            cc: cc,
+                            bcc: bcc,
                             subject: subject,
                             body: body,
                             htmlBody: htmlBody,
@@ -520,6 +627,8 @@ struct ComposerView: View {
                         try await apiClient.sendDraft(
                             draftId: currentDraftId,
                             to: to,
+                            cc: cc,
+                            bcc: bcc,
                             subject: subject,
                             body: body,
                             htmlBody: htmlBody,
@@ -530,6 +639,8 @@ struct ComposerView: View {
                     } else {
                         try await apiClient.sendEmail(
                             to: to,
+                            cc: cc,
+                            bcc: bcc,
                             subject: subject,
                             body: body,
                             htmlBody: htmlBody,
@@ -547,6 +658,65 @@ struct ComposerView: View {
 
         isSending = false
         onClose()
+    }
+
+    private func sendLater() async {
+        guard canSend, scheduledSendDate > Date() else { return }
+        autosaveTask?.cancel()
+        isSending = true
+        defer { isSending = false }
+
+        do {
+            let threadId: String?
+            switch mode {
+            case .reply(let email):
+                threadId = email.threadId
+            case .draft(let email):
+                threadId = draftThreadId ?? email.threadId
+            default:
+                threadId = nil
+            }
+
+            _ = try await apiClient.scheduleEmail(
+                to: cleanedRecipients(to),
+                cc: cleanedOptionalRecipient(cc),
+                bcc: cleanedOptionalRecipient(bcc),
+                subject: subject,
+                body: messageBody,
+                htmlBody: composedHTMLBody(),
+                sendAt: scheduledSendDate,
+                accountId: selectedAccountId,
+                threadId: threadId,
+                attachments: attachmentUploads()
+            )
+
+            if let currentDraftId {
+                try? await apiClient.deleteDraft(draftId: currentDraftId, accountId: selectedAccountId)
+            }
+
+            isShowingSendLaterSheet = false
+            onSent()
+            onClose()
+        } catch {
+            errorMessage = "Could not schedule email."
+        }
+    }
+
+    private func defaultScheduledDate() -> Date {
+        Calendar.current.date(byAdding: .hour, value: 1, to: Date()) ?? Date().addingTimeInterval(3600)
+    }
+
+    private func cleanedOptionalRecipient(_ value: String) -> String? {
+        let trimmed = cleanedRecipients(value)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func cleanedRecipients(_ value: String) -> String {
+        value
+            .components(separatedBy: CharacterSet(charactersIn: ",;"))
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: ", ")
     }
 
     private func attachmentUploads() -> [EmailAttachmentUpload] {
@@ -581,12 +751,14 @@ struct ComposerView: View {
 
     private var shouldAutosaveDraft: Bool {
         !to.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+        !cc.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+        !bcc.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
         !subject.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
         !messageBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private func draftFingerprint() -> String {
-        "\(selectedAccountId ?? "")|\(to)|\(subject)|\(messageBody)|\(attachments.map(\.name).joined(separator: ","))"
+        "\(selectedAccountId ?? "")|\(to)|\(cc)|\(bcc)|\(subject)|\(messageBody)|\(attachments.map(\.name).joined(separator: ","))"
     }
 
     private func saveDraftIfNeeded() async {
@@ -606,7 +778,9 @@ struct ComposerView: View {
             if let currentDraftId {
                 result = try await apiClient.updateDraft(
                     draftId: currentDraftId,
-                    to: to,
+                    to: cleanedRecipients(to),
+                    cc: cleanedOptionalRecipient(cc),
+                    bcc: cleanedOptionalRecipient(bcc),
                     subject: subject,
                     body: messageBody,
                     htmlBody: composedHTMLBody(),
@@ -616,7 +790,9 @@ struct ComposerView: View {
                 )
             } else {
                 result = try await apiClient.createDraft(
-                    to: to,
+                    to: cleanedRecipients(to),
+                    cc: cleanedOptionalRecipient(cc),
+                    bcc: cleanedOptionalRecipient(bcc),
                     subject: subject,
                     body: messageBody,
                     htmlBody: composedHTMLBody(),
@@ -769,6 +945,94 @@ private struct RecipientSuggestionList: View {
             return initials.uppercased()
         }
         return String(contact.email.prefix(1)).uppercased()
+    }
+}
+
+private struct SendLaterSheet: View {
+    @Binding var scheduledDate: Date
+    let canSchedule: Bool
+    let onSchedule: () -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack {
+                Text("Send Later")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(Theme.Palette.textPrimary)
+                Spacer()
+                Button {
+                    dismiss()
+                } label: {
+                    Image(systemName: "xmark")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Theme.Palette.textTertiary)
+            }
+
+            DatePicker(
+                "Send at",
+                selection: $scheduledDate,
+                in: Date()...,
+                displayedComponents: [.date, .hourAndMinute]
+            )
+            .datePickerStyle(.compact)
+            .tint(Theme.Palette.accent)
+
+            HStack(spacing: 10) {
+                quickDateButton("In 1 hour", date: Calendar.current.date(byAdding: .hour, value: 1, to: Date()))
+                quickDateButton("Tomorrow 9 AM", date: tomorrowMorning())
+            }
+
+            Spacer()
+
+            HStack {
+                Spacer()
+                Button("Cancel") {
+                    dismiss()
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Theme.Palette.textTertiary)
+
+                Button {
+                    onSchedule()
+                    dismiss()
+                } label: {
+                    Label("Schedule", systemImage: "clock.badge.checkmark")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 9)
+                        .background(canSchedule ? Theme.Palette.accent : Theme.Palette.textTertiary.opacity(0.35))
+                        .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(!canSchedule)
+            }
+        }
+        .padding(18)
+        .background(Theme.Palette.surface)
+    }
+
+    private func quickDateButton(_ title: String, date: Date?) -> some View {
+        Button(title) {
+            if let date {
+                scheduledDate = date
+            }
+        }
+        .buttonStyle(.plain)
+        .font(.system(size: 12, weight: .semibold))
+        .foregroundStyle(Theme.Palette.accentSoft)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(Theme.Palette.accent.opacity(0.12))
+        .clipShape(Capsule())
+    }
+
+    private func tomorrowMorning() -> Date? {
+        let calendar = Calendar.current
+        let tomorrow = calendar.date(byAdding: .day, value: 1, to: Date()) ?? Date()
+        return calendar.date(bySettingHour: 9, minute: 0, second: 0, of: tomorrow)
     }
 }
 

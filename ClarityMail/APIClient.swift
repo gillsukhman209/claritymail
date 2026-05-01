@@ -148,8 +148,18 @@ struct APIClient {
         try await post("/emails/\(id)/unstar", queryItems: accountQueryItems(accountId: accountId))
     }
 
+    func pinEmail(id: Email.ID, accountId: String? = nil) async throws {
+        try await post("/emails/\(id)/pin", queryItems: accountQueryItems(accountId: accountId))
+    }
+
+    func unpinEmail(id: Email.ID, accountId: String? = nil) async throws {
+        try await delete("/emails/\(id)/pin", queryItems: accountQueryItems(accountId: accountId))
+    }
+
     func sendEmail(
         to: String,
+        cc: String? = nil,
+        bcc: String? = nil,
         subject: String,
         body: String,
         htmlBody: String? = nil,
@@ -161,6 +171,8 @@ struct APIClient {
             body: SendEmailRequest(
                 accountId: accountId,
                 to: to,
+                cc: cc,
+                bcc: bcc,
                 subject: subject,
                 body: body,
                 htmlBody: htmlBody,
@@ -171,6 +183,8 @@ struct APIClient {
 
     func createDraft(
         to: String,
+        cc: String? = nil,
+        bcc: String? = nil,
         subject: String,
         body: String,
         htmlBody: String? = nil,
@@ -183,6 +197,8 @@ struct APIClient {
             body: DraftEmailRequest(
                 accountId: accountId,
                 to: to,
+                cc: cc,
+                bcc: bcc,
                 subject: subject,
                 body: body,
                 htmlBody: htmlBody,
@@ -196,6 +212,8 @@ struct APIClient {
     func updateDraft(
         draftId: String,
         to: String,
+        cc: String? = nil,
+        bcc: String? = nil,
         subject: String,
         body: String,
         htmlBody: String? = nil,
@@ -208,6 +226,8 @@ struct APIClient {
             body: DraftEmailRequest(
                 accountId: accountId,
                 to: to,
+                cc: cc,
+                bcc: bcc,
                 subject: subject,
                 body: body,
                 htmlBody: htmlBody,
@@ -221,6 +241,8 @@ struct APIClient {
     func sendDraft(
         draftId: String,
         to: String,
+        cc: String? = nil,
+        bcc: String? = nil,
         subject: String,
         body: String,
         htmlBody: String? = nil,
@@ -233,6 +255,8 @@ struct APIClient {
             body: DraftEmailRequest(
                 accountId: accountId,
                 to: to,
+                cc: cc,
+                bcc: bcc,
                 subject: subject,
                 body: body,
                 htmlBody: htmlBody,
@@ -252,6 +276,8 @@ struct APIClient {
             body: ReplyEmailRequest(
                 accountId: accountId,
                 to: email.senderEmailAddress,
+                cc: nil,
+                bcc: nil,
                 subject: email.subject,
                 body: body,
                 htmlBody: nil,
@@ -263,6 +289,8 @@ struct APIClient {
 
     func reply(
         to: String,
+        cc: String? = nil,
+        bcc: String? = nil,
         subject: String,
         body: String,
         htmlBody: String? = nil,
@@ -275,6 +303,8 @@ struct APIClient {
             body: ReplyEmailRequest(
                 accountId: accountId,
                 to: to,
+                cc: cc,
+                bcc: bcc,
                 subject: subject,
                 body: body,
                 htmlBody: htmlBody,
@@ -282,6 +312,40 @@ struct APIClient {
                 attachments: attachments
             )
         )
+    }
+
+    func scheduleEmail(
+        to: String,
+        cc: String? = nil,
+        bcc: String? = nil,
+        subject: String,
+        body: String,
+        htmlBody: String? = nil,
+        sendAt: Date,
+        accountId: String? = nil,
+        threadId: String? = nil,
+        attachments: [EmailAttachmentUpload] = []
+    ) async throws -> ScheduledEmailResult {
+        let response: ScheduledEmailResponse = try await postJSONForResponse(
+            "/send-later",
+            body: ScheduledEmailRequest(
+                accountId: accountId,
+                to: to,
+                cc: cc,
+                bcc: bcc,
+                subject: subject,
+                body: body,
+                htmlBody: htmlBody,
+                threadId: threadId,
+                sendAt: ISO8601DateFormatter().string(from: sendAt),
+                attachments: attachments
+            )
+        )
+        return response.scheduledEmail
+    }
+
+    func processDueScheduledEmails() async throws {
+        try await post("/send-later/process-due")
     }
 
     func startRealtimeSync(accountId: String? = nil) async throws {
@@ -741,6 +805,8 @@ private struct DraftResponse: Decodable {
 private struct SendEmailRequest: Encodable {
     let accountId: String?
     let to: String
+    let cc: String?
+    let bcc: String?
     let subject: String
     let body: String
     let htmlBody: String?
@@ -750,6 +816,8 @@ private struct SendEmailRequest: Encodable {
 private struct ReplyEmailRequest: Encodable {
     let accountId: String?
     let to: String
+    let cc: String?
+    let bcc: String?
     let subject: String
     let body: String
     let htmlBody: String?
@@ -760,10 +828,34 @@ private struct ReplyEmailRequest: Encodable {
 private struct DraftEmailRequest: Encodable {
     let accountId: String?
     let to: String
+    let cc: String?
+    let bcc: String?
     let subject: String
     let body: String
     let htmlBody: String?
     let threadId: String?
+    let attachments: [EmailAttachmentUpload]
+}
+
+struct ScheduledEmailResult: Decodable {
+    let id: String
+    let sendAt: String
+}
+
+private struct ScheduledEmailResponse: Decodable {
+    let scheduledEmail: ScheduledEmailResult
+}
+
+private struct ScheduledEmailRequest: Encodable {
+    let accountId: String?
+    let to: String
+    let cc: String?
+    let bcc: String?
+    let subject: String
+    let body: String
+    let htmlBody: String?
+    let threadId: String?
+    let sendAt: String
     let attachments: [EmailAttachmentUpload]
 }
 
