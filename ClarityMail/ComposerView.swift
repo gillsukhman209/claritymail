@@ -261,6 +261,7 @@ struct ComposerView: View {
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(Theme.Palette.textTertiary)
+                    .accessibilityLabel("Attachments")
 
                     Button {
                         scheduledSendDate = defaultScheduledDate()
