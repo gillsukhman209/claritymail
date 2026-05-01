@@ -9,12 +9,12 @@ import WebKit
 struct EmailHTMLView: View {
     let html: String?
     let plainText: String
-    @State private var contentHeight: CGFloat = 700
+    @State private var contentHeight: CGFloat = 120
 
     var body: some View {
         if let html, !html.isEmpty {
             EmailWebView(html: wrappedHTML(html), contentHeight: $contentHeight)
-                .frame(height: max(contentHeight, 700))
+                .frame(height: max(contentHeight, 80))
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.row, style: .continuous))
         } else {
             Text(plainText)
@@ -97,7 +97,7 @@ private struct EmailWebView: NSViewRepresentable {
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             webView.evaluateJavaScript("Math.max(document.body.scrollHeight, document.documentElement.scrollHeight)") { [weak self] result, _ in
                 guard let self else { return }
-                let height = CGFloat((result as? NSNumber)?.doubleValue ?? 700)
+                let height = CGFloat((result as? NSNumber)?.doubleValue ?? 120)
                 DispatchQueue.main.async {
                     self.contentHeight = height + 24
                 }
@@ -150,7 +150,7 @@ private struct EmailWebView: UIViewRepresentable {
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             webView.evaluateJavaScript("Math.max(document.body.scrollHeight, document.documentElement.scrollHeight)") { [weak self] result, _ in
                 guard let self else { return }
-                let height = CGFloat((result as? NSNumber)?.doubleValue ?? 700)
+                let height = CGFloat((result as? NSNumber)?.doubleValue ?? 120)
                 DispatchQueue.main.async {
                     self.contentHeight = height + 24
                 }
