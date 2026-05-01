@@ -52,7 +52,13 @@ struct MailboxView: View {
                             .padding(.horizontal, 24)
                             .padding(.top, 8)
 
-                        GreetingBlock(name: session.displayName, unreadCount: unreadCount)
+                        GreetingBlock(
+                            name: session.displayName,
+                            unreadCount: unreadCount,
+                            messageCount: emails.count,
+                            selectedFolder: selectedFolder,
+                            isPriorityMode: isPriorityMode
+                        )
                             .padding(.horizontal, 24)
 
                         AccountSearchBar(
@@ -1210,6 +1216,9 @@ private struct FluxHeader: View {
 private struct GreetingBlock: View {
     let name: String
     let unreadCount: Int
+    let messageCount: Int
+    let selectedFolder: MailboxFolder
+    let isPriorityMode: Bool
 
     private var greeting: String {
         let hour = Calendar.current.component(.hour, from: .now)
@@ -1222,10 +1231,53 @@ private struct GreetingBlock: View {
     }
 
     private var subtitle: String {
+        if isPriorityMode {
+            switch messageCount {
+            case 0: return "No priority emails."
+            case 1: return "1 priority email"
+            default: return "\(messageCount) priority emails"
+            }
+        }
+
+        if selectedFolder != .inbox {
+            return folderSubtitle
+        }
+
         switch unreadCount {
         case 0: return "You're all caught up."
         case 1: return "1 unread message"
         default: return "\(unreadCount) unread messages"
+        }
+    }
+
+    private var folderSubtitle: String {
+        switch selectedFolder {
+        case .inbox:
+            return ""
+        case .sent:
+            switch messageCount {
+            case 0: return "No sent messages."
+            case 1: return "1 sent message"
+            default: return "\(messageCount) sent messages"
+            }
+        case .drafts:
+            switch messageCount {
+            case 0: return "No drafts."
+            case 1: return "1 draft"
+            default: return "\(messageCount) drafts"
+            }
+        case .archive:
+            switch messageCount {
+            case 0: return "No archived emails."
+            case 1: return "1 archived email"
+            default: return "\(messageCount) archived emails"
+            }
+        case .trash:
+            switch messageCount {
+            case 0: return "No trashed emails."
+            case 1: return "1 trashed email"
+            default: return "\(messageCount) trashed emails"
+            }
         }
     }
 
