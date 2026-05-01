@@ -170,8 +170,14 @@ function decodeHtmlEntities(value: string) {
   });
 }
 
+function stripInvisibleEmailPadding(value: string) {
+  return value
+    .replace(/[\u034f\u061c\u115f\u1160\u17b4\u17b5\u180e\u200b-\u200f\u2028-\u202f\u205f\u2060-\u206f\ufeff]/g, " ")
+    .replace(/\u00ad/g, "");
+}
+
 function cleanText(value: string) {
-  return decodeHtmlEntities(value).replace(/\s+/g, " ").trim();
+  return stripInvisibleEmailPadding(decodeHtmlEntities(value)).replace(/\s+/g, " ").trim();
 }
 
 function stripHtml(value: string) {
