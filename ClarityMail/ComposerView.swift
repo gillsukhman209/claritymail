@@ -699,7 +699,11 @@ struct ComposerView: View {
             onSent()
             onClose()
         } catch {
-            errorMessage = "Could not schedule email."
+            if case APIError.serverMessage(let message) = error {
+                errorMessage = message
+            } else {
+                errorMessage = "Could not schedule email."
+            }
         }
     }
 

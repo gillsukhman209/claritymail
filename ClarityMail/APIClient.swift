@@ -500,10 +500,19 @@ struct APIClient {
 
         guard let httpResponse = response as? HTTPURLResponse,
               (200..<300).contains(httpResponse.statusCode) else {
-            throw APIError.badResponse
+            throw apiError(from: data)
         }
 
         return try JSONDecoder().decode(ResponseBody.self, from: data)
+    }
+
+    private func apiError(from data: Data) -> APIError {
+        if let errorResponse = try? JSONDecoder().decode(APIErrorResponse.self, from: data),
+           !errorResponse.error.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return .serverMessage(errorResponse.error)
+        }
+
+        return .badResponse
     }
 
     private func makeURL(_ path: String, queryItems: [URLQueryItem] = []) -> URL {
@@ -869,6 +878,11 @@ private struct DeviceTokenRequest: Encodable {
     let environment: String
 }
 
+private struct APIErrorResponse: Decodable {
+    let error: String
+}
+
 enum APIError: Error {
     case badResponse
+    case serverMessage(String)
 }
