@@ -14,6 +14,13 @@ import {
   listImportantSenders,
   saveImportantSender
 } from "../db/importantSenders.repo.js";
+import {
+  applyMutedSenderState,
+  deleteMutedSender,
+  listMutedSenderEmails,
+  listMutedSenders,
+  saveMutedSender
+} from "../db/mutedSenders.repo.js";
 import { deletePinnedEmail, listPinnedEmailIds, savePinnedEmail } from "../db/pinnedEmails.repo.js";
 import {
   listDueScheduledEmails,
@@ -102,6 +109,18 @@ async function addPinnedState(accountId: string, emails: any[]) {
   }));
 }
 
+function sortInboxEmails<T extends { receivedAt: string; isPinned?: boolean; prioritySource?: string }>(emails: T[]) {
+  return emails.sort((left, right) => {
+    if (Boolean(left.isPinned) !== Boolean(right.isPinned)) {
+      return left.isPinned ? -1 : 1;
+    }
+    if ((left.prioritySource === "manual_sender") !== (right.prioritySource === "manual_sender")) {
+      return left.prioritySource === "manual_sender" ? -1 : 1;
+    }
+    return Date.parse(right.receivedAt) - Date.parse(left.receivedAt);
+  });
+}
+
 function sortPinnedNewestFirst<T extends { receivedAt: string; isPinned?: boolean }>(emails: T[]) {
   return emails.sort((left, right) => {
     if (Boolean(left.isPinned) !== Boolean(right.isPinned)) {
@@ -151,10 +170,14 @@ emailRoutes.get("/emails", async (request, response, next) => {
       const emailsWithPriority = priorityOnly
         ? await enrichEmailsWithPriority(account.id ?? accountId, blockedFilteredEmails, importantSenderEmails)
         : applyImportantSenderPriority(blockedFilteredEmails, importantSenderEmails);
-      const emailsWithPinnedState = await addPinnedState(account.id ?? accountId, emailsWithPriority);
+      const mutedSenderEmails = await listMutedSenderEmails(account.id ?? accountId);
+      const emailsWithMutedState = applyMutedSenderState(emailsWithPriority, mutedSenderEmails);
+      const emailsWithPinnedState = await addPinnedState(account.id ?? accountId, emailsWithMutedState);
       const emails = priorityOnly
         ? sortPriorityEmails(emailsWithPinnedState.filter((email: any) => email.priorityStatus === "important"))
-        : sortPinnedNewestFirst(emailsWithPinnedState);
+        : folder === "inbox"
+          ? sortInboxEmails(emailsWithPinnedState)
+          : sortPinnedNewestFirst(emailsWithPinnedState);
 
       response.json({
         emails,
@@ -180,7 +203,9 @@ emailRoutes.get("/emails", async (request, response, next) => {
         const emailsWithPriority = priorityOnly
           ? await enrichEmailsWithPriority(account.id ?? accountSummary.id, blockedFilteredEmails, importantSenderEmails)
           : applyImportantSenderPriority(blockedFilteredEmails, importantSenderEmails);
-        const emailsWithPinnedState = await addPinnedState(account.id ?? accountSummary.id, emailsWithPriority);
+        const mutedSenderEmails = await listMutedSenderEmails(account.id ?? accountSummary.id);
+        const emailsWithMutedState = applyMutedSenderState(emailsWithPriority, mutedSenderEmails);
+        const emailsWithPinnedState = await addPinnedState(account.id ?? accountSummary.id, emailsWithMutedState);
 
         return {
           emails: priorityOnly
@@ -194,7 +219,9 @@ emailRoutes.get("/emails", async (request, response, next) => {
 
     const emails = (priorityOnly
       ? sortPriorityEmails(emailGroups.flatMap((group) => group.emails))
-      : sortPinnedNewestFirst(emailGroups.flatMap((group) => group.emails))
+      : folder === "inbox"
+        ? sortInboxEmails(emailGroups.flatMap((group) => group.emails))
+        : sortPinnedNewestFirst(emailGroups.flatMap((group) => group.emails))
     ).slice(0, 50);
 
     response.json({
@@ -235,7 +262,10 @@ emailRoutes.get("/emails/:id", async (request, response, next) => {
     const account = await requireSelectedAccount(request, response);
     if (!account) return;
 
-    const [email] = await addPinnedState(account.id ?? "", [await getEmail(account, request.params.id)]);
+    const [email] = await addPinnedState(
+      account.id ?? "",
+      applyMutedSenderState([await getEmail(account, request.params.id)], await listMutedSenderEmails(account.id ?? ""))
+    );
     response.json({ email });
   } catch (error) {
     next(error);
@@ -247,7 +277,13 @@ emailRoutes.get("/threads/:threadId", async (request, response, next) => {
     const account = await requireSelectedAccount(request, response);
     if (!account) return;
 
-    response.json({ emails: await addPinnedState(account.id ?? "", await getThread(account, request.params.threadId)) });
+    const threadEmails = await getThread(account, request.params.threadId);
+    response.json({
+      emails: await addPinnedState(
+        account.id ?? "",
+        applyMutedSenderState(threadEmails, await listMutedSenderEmails(account.id ?? ""))
+      )
+    });
   } catch (error) {
     next(error);
   }
@@ -667,6 +703,59 @@ emailRoutes.delete("/important-senders", async (request, response, next) => {
     }
 
     await deleteImportantSender({ accountId, senderEmail });
+    response.json({ ok: true, senderEmail });
+  } catch (error) {
+    next(error);
+  }
+});
+
+emailRoutes.post("/emails/:id/mute-sender", async (request, response, next) => {
+  try {
+    const account = await requireSelectedAccount(request, response);
+    if (!account) return;
+
+    if (!account.id || !account.email) {
+      response.status(400).json({ error: "Connected Gmail account is missing account metadata." });
+      return;
+    }
+
+    const email = await getEmail(account, request.params.id);
+    const senderEmail = normalizeEmailAddress(email.sender);
+
+    await saveMutedSender({
+      accountId: account.id,
+      accountEmail: account.email,
+      senderEmail,
+      senderName: senderDisplayName(email.sender)
+    });
+
+    response.json({ ok: true, senderEmail });
+  } catch (error) {
+    next(error);
+  }
+});
+
+emailRoutes.get("/muted-senders", async (request, response, next) => {
+  try {
+    const accountId = typeof request.query.accountId === "string" ? request.query.accountId : undefined;
+    response.json({ mutedSenders: await listMutedSenders(accountId) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+emailRoutes.delete("/muted-senders", async (request, response, next) => {
+  try {
+    const accountId = typeof request.query.accountId === "string" ? request.query.accountId : undefined;
+    const senderEmail =
+      typeof request.query.senderEmail === "string" ? normalizeEmailAddress(request.query.senderEmail) : undefined;
+
+    if (!accountId || !senderEmail) {
+      response.status(400).json({ error: "Missing accountId or senderEmail." });
+      return;
+    }
+
+    await deleteMutedSender({ accountId, senderEmail });
     response.json({ ok: true, senderEmail });
   } catch (error) {
     next(error);
