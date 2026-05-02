@@ -44,7 +44,7 @@ struct EmailDetailView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     actionBar
-                        .padding(.horizontal, 22)
+                        .padding(.horizontal, detailHorizontalPadding)
                         .padding(.top, 14)
                         .padding(.bottom, 14)
 
@@ -53,16 +53,16 @@ struct EmailDetailView: View {
                         .frame(height: 1)
 
                     headerSection
-                        .padding(.horizontal, 22)
+                        .padding(.horizontal, detailHorizontalPadding)
                         .padding(.top, 26)
                         .padding(.bottom, 22)
 
                     deliveryDetailsCard
-                        .padding(.horizontal, 22)
+                        .padding(.horizontal, detailHorizontalPadding)
                         .padding(.bottom, 22)
 
                     summaryCard
-                        .padding(.horizontal, 22)
+                        .padding(.horizontal, detailHorizontalPadding)
                         .padding(.bottom, 22)
 
                     if let errorMessage {
@@ -81,12 +81,12 @@ struct EmailDetailView: View {
                             Rectangle()
                                 .strokeBorder(Theme.Palette.danger.opacity(0.4), lineWidth: 1)
                         )
-                        .padding(.horizontal, 22)
+                        .padding(.horizontal, detailHorizontalPadding)
                         .padding(.bottom, 18)
                     }
 
                     threadSection
-                        .padding(.horizontal, 22)
+                        .padding(.horizontal, detailHorizontalPadding)
                         .padding(.bottom, 22)
 
                     if isLoading && loadedEmail == nil {
@@ -97,10 +97,12 @@ struct EmailDetailView: View {
 
                     Color.clear.frame(height: 40)
                 }
-                .frame(maxWidth: 760, alignment: .leading)
+                .frame(maxWidth: detailMaxWidth, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             .scrollIndicators(.hidden)
 
+            #if os(macOS)
             if isShowingReply {
                 composerOverlay(mode: .reply(visibleEmail), isPresented: $isShowingReply)
             }
@@ -108,6 +110,7 @@ struct EmailDetailView: View {
             if isShowingForward {
                 composerOverlay(mode: .forward(visibleEmail), isPresented: $isShowingForward)
             }
+            #endif
 
             VStack {
                 Spacer()
@@ -118,6 +121,36 @@ struct EmailDetailView: View {
         }
         .animation(.snappy(duration: 0.2), value: isShowingReply)
         .navigationTitle("")
+        #if os(iOS)
+        .sheet(isPresented: $isShowingReply) {
+            ComposerView(
+                mode: .reply(visibleEmail),
+                accountId: accountId ?? visibleEmail.accountId,
+                accounts: accounts,
+                recipientSuggestions: recipientSuggestions,
+                onSent: {},
+                onClose: {
+                    isShowingReply = false
+                }
+            )
+            .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $isShowingForward) {
+            ComposerView(
+                mode: .forward(visibleEmail),
+                accountId: accountId ?? visibleEmail.accountId,
+                accounts: accounts,
+                recipientSuggestions: recipientSuggestions,
+                onSent: {},
+                onClose: {
+                    isShowingForward = false
+                }
+            )
+            .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
+        }
+        #endif
         .background {
             Button("") {
                 Task { await trash() }
@@ -131,6 +164,22 @@ struct EmailDetailView: View {
             await loadSummary()
         }
         .tint(Theme.Palette.accent)
+    }
+
+    private var detailHorizontalPadding: CGFloat {
+        #if os(iOS)
+        return 16
+        #else
+        return 22
+        #endif
+    }
+
+    private var detailMaxWidth: CGFloat {
+        #if os(iOS)
+        return .infinity
+        #else
+        return 760
+        #endif
     }
 
     private var actionBar: some View {

@@ -236,7 +236,7 @@ struct ComposerView: View {
                     .foregroundStyle(Theme.Palette.textPrimary)
                     .focused($focusedField, equals: .body)
                     .padding(12)
-                    .frame(height: attachments.isEmpty ? 165 : 105)
+                    .composerBodyFrame(hasAttachments: !attachments.isEmpty)
 
                 if !attachments.isEmpty {
                     attachmentList
@@ -298,13 +298,11 @@ struct ComposerView: View {
                 .background(Theme.Palette.surfaceElevated)
             }
         }
-        .frame(minWidth: 320, maxWidth: 540)
-        .frame(height: composerHeight)
+        .composerContainerFrame(height: composerHeight)
         .background(Theme.Palette.surface)
-        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
+        .composerContainerClip()
         .overlay(
-            RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
-                .strokeBorder(Theme.Palette.borderStrong, lineWidth: 1)
+            composerBorder
         )
         .shadow(color: .black.opacity(0.20), radius: 32, x: 0, y: 18)
         .fileImporter(
@@ -337,6 +335,17 @@ struct ComposerView: View {
         .onDisappear {
             autosaveTask?.cancel()
         }
+    }
+
+    @ViewBuilder
+    private var composerBorder: some View {
+        #if os(iOS)
+        Rectangle()
+            .strokeBorder(Theme.Palette.borderStrong, lineWidth: 1)
+        #else
+        RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
+            .strokeBorder(Theme.Palette.borderStrong, lineWidth: 1)
+        #endif
     }
 
     private var composerHeight: CGFloat {
@@ -433,7 +442,7 @@ struct ComposerView: View {
     @ViewBuilder
     private var accountPicker: some View {
         if accounts.isEmpty {
-            Text(selectedAccountId == nil ? "Default account" : "Original account")
+            Text(selectedAccountId == nil ? "Default" : "Original")
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(Theme.Palette.textTertiary)
         } else {
@@ -450,18 +459,27 @@ struct ComposerView: View {
                 }
             } label: {
                 HStack(spacing: 5) {
-                    Text(selectedAccount?.email ?? accounts.first?.email ?? "Select account")
+                    Text(accountPickerLabel)
                         .lineLimit(1)
                     Image(systemName: "chevron.down")
                         .font(.system(size: 8, weight: .bold))
                 }
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(Theme.Palette.textTertiary)
-                .frame(maxWidth: 190, alignment: .trailing)
+                .accountPickerFrame()
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
         }
+    }
+
+    private var accountPickerLabel: String {
+        let email = selectedAccount?.email ?? accounts.first?.email ?? "Select account"
+        #if os(iOS)
+        return email.split(separator: "@").first.map(String.init) ?? email
+        #else
+        return email
+        #endif
     }
 
     private func selectRecipientSuggestion(_ contact: EmailContact) {
@@ -873,6 +891,46 @@ struct ComposerView: View {
         } catch {
             errorMessage = "Could not attach file."
         }
+    }
+}
+
+private extension View {
+    @ViewBuilder
+    func composerBodyFrame(hasAttachments: Bool) -> some View {
+        #if os(iOS)
+        self.frame(minHeight: hasAttachments ? 220 : 300, maxHeight: .infinity)
+        #else
+        self.frame(height: hasAttachments ? 105 : 165)
+        #endif
+    }
+
+    @ViewBuilder
+    func composerContainerFrame(height: CGFloat) -> some View {
+        #if os(iOS)
+        self.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        #else
+        self
+            .frame(minWidth: 320, maxWidth: 540)
+            .frame(height: height)
+        #endif
+    }
+
+    @ViewBuilder
+    func composerContainerClip() -> some View {
+        #if os(iOS)
+        self
+        #else
+        self.clipShape(RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
+        #endif
+    }
+
+    @ViewBuilder
+    func accountPickerFrame() -> some View {
+        #if os(iOS)
+        self.frame(maxWidth: 104, alignment: .trailing)
+        #else
+        self.frame(maxWidth: 190, alignment: .trailing)
+        #endif
     }
 }
 

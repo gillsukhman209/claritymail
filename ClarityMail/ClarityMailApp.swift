@@ -20,6 +20,7 @@ struct ClarityMailApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .appearancePreference()
         }
     }
 }

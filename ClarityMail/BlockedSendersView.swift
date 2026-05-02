@@ -58,7 +58,7 @@ struct BlockedSendersView: View {
                 .padding(.vertical, 22)
             }
         }
-        .frame(minWidth: 560, minHeight: 440)
+        .blockedSendersSheetFrame()
         .background(Theme.Palette.background)
         .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
         .overlay(
@@ -150,6 +150,17 @@ struct BlockedSendersView: View {
         } catch {
             errorMessage = "Could not unblock sender."
         }
+    }
+}
+
+private extension View {
+    @ViewBuilder
+    func blockedSendersSheetFrame() -> some View {
+        #if os(iOS)
+        self.frame(maxWidth: .infinity, maxHeight: .infinity)
+        #else
+        self.frame(minWidth: 560, minHeight: 440)
+        #endif
     }
 }
 

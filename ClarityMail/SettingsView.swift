@@ -11,6 +11,7 @@ struct SettingsView: View {
 
     @Environment(\.dismiss) private var dismiss
     @AppStorage("undoSendDelaySeconds") private var undoSendDelaySeconds = 10
+    @AppStorage(AppearanceStorage.key) private var appearanceRaw: String = AppearancePreference.system.rawValue
     @State private var isWorking = false
     @State private var isSavingBrief = false
     @State private var isGeneratingBrief = false
@@ -27,6 +28,7 @@ struct SettingsView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 28) {
+                    appearanceSection
                     sendingSection
                     morningBriefSection
                     accountsSection
@@ -46,13 +48,9 @@ struct SettingsView: View {
                 .padding(.vertical, 24)
             }
         }
-        .frame(width: 600, height: 520)
+        .settingsSheetFrame()
         .background(Theme.Palette.background)
-        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
-                .strokeBorder(Theme.Palette.borderStrong, lineWidth: 1)
-        )
+        .settingsSheetChrome()
         .shadow(color: .black.opacity(0.20), radius: 36, x: 0, y: 18)
         .task {
             await loadMorningBrief()
@@ -93,6 +91,43 @@ struct SettingsView: View {
             Rectangle().fill(Theme.Palette.borderStrong).frame(height: 1),
             alignment: .bottom
         )
+    }
+
+    private var appearance: AppearancePreference {
+        AppearancePreference(rawValue: appearanceRaw) ?? .system
+    }
+
+    private var appearanceSection: some View {
+        SettingsCard(title: "Appearance", systemImage: "circle.lefthalf.filled") {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .top, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Theme")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(Theme.Palette.textPrimary)
+                        Text("Match the system, or pick a fixed canvas. Light mode is hand-tuned bone paper; dark is deep ink.")
+                            .font(.system(size: 12))
+                            .foregroundStyle(Theme.Palette.textTertiary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    Spacer(minLength: 0)
+                }
+
+                HStack(spacing: 10) {
+                    ForEach(AppearancePreference.allCases) { option in
+                        AppearanceOptionTile(
+                            option: option,
+                            isSelected: appearance == option
+                        ) {
+                            withAnimation(Theme.Motion.snappy) {
+                                appearanceRaw = option.rawValue
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     private var sendingSection: some View {
@@ -224,22 +259,14 @@ struct SettingsView: View {
                 Toggle("Only notify if important emails exist", isOn: $briefSettings.onlyNotifyIfImportant)
                     .toggleStyle(.switch)
 
-                HStack(spacing: 10) {
-                    Button {
-                        Task { await saveMorningBriefSettings() }
-                    } label: {
-                        Label(isSavingBrief ? "Saving" : "Save", systemImage: "checkmark")
+                ViewThatFits {
+                    HStack(spacing: 10) {
+                        morningBriefActions
                     }
-                    .buttonStyle(SettingsActionButtonStyle(isPrimary: false))
-                    .disabled(isSavingBrief || isGeneratingBrief)
 
-                    Button {
-                        Task { await generateTestBrief() }
-                    } label: {
-                        Label(isGeneratingBrief ? "Generating" : "Generate Test Brief", systemImage: "sparkles")
+                    VStack(alignment: .leading, spacing: 10) {
+                        morningBriefActions
                     }
-                    .buttonStyle(SettingsActionButtonStyle(isPrimary: true))
-                    .disabled(isSavingBrief || isGeneratingBrief)
                 }
 
                 if let latestBrief {
@@ -248,6 +275,25 @@ struct SettingsView: View {
                 }
             }
         }
+    }
+
+    @ViewBuilder
+    private var morningBriefActions: some View {
+        Button {
+            Task { await saveMorningBriefSettings() }
+        } label: {
+            Label(isSavingBrief ? "Saving" : "Save", systemImage: "checkmark")
+        }
+        .buttonStyle(SettingsActionButtonStyle(isPrimary: false))
+        .disabled(isSavingBrief || isGeneratingBrief)
+
+        Button {
+            Task { await generateTestBrief() }
+        } label: {
+            Label(isGeneratingBrief ? "Generating" : "Generate Test Brief", systemImage: "sparkles")
+        }
+        .buttonStyle(SettingsActionButtonStyle(isPrimary: true))
+        .disabled(isSavingBrief || isGeneratingBrief)
     }
 
     private func logout(_ account: GmailAccount) async {
@@ -316,6 +362,34 @@ struct SettingsView: View {
     private static func timeString(from date: Date) -> String {
         let components = Calendar.current.dateComponents([.hour, .minute], from: date)
         return String(format: "%02d:%02d", components.hour ?? 9, components.minute ?? 0)
+    }
+}
+
+private extension View {
+    @ViewBuilder
+    func settingsSheetFrame() -> some View {
+        #if os(iOS)
+        self.frame(maxWidth: .infinity, maxHeight: .infinity)
+        #else
+        self.frame(width: 600, height: 520)
+        #endif
+    }
+
+    @ViewBuilder
+    func settingsSheetChrome() -> some View {
+        #if os(iOS)
+        self.overlay(
+            Rectangle()
+                .strokeBorder(Theme.Palette.borderStrong, lineWidth: 1)
+        )
+        #else
+        self
+            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
+                    .strokeBorder(Theme.Palette.borderStrong, lineWidth: 1)
+            )
+        #endif
     }
 }
 
@@ -494,5 +568,122 @@ private struct AccountSettingsRow: View {
     private var initials: String {
         let name = account.email.split(separator: "@").first.map(String.init) ?? "G"
         return String(name.prefix(1)).uppercased()
+    }
+}
+
+private struct AppearanceOptionTile: View {
+    let option: AppearancePreference
+    let isSelected: Bool
+    let onTap: () -> Void
+
+    var body: some View {
+        Button(action: onTap) {
+            VStack(alignment: .leading, spacing: 12) {
+                preview
+
+                HStack(alignment: .center, spacing: 6) {
+                    Image(systemName: option.systemImage)
+                        .font(.system(size: 11, weight: .heavy))
+                    Text(option.label.uppercased())
+                        .font(Theme.Typography.mono(10, weight: .heavy))
+                        .tracking(1.6)
+                }
+                .foregroundStyle(isSelected ? Theme.Palette.background : Theme.Palette.textPrimary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .background(
+                    Rectangle().fill(isSelected ? Theme.Palette.textPrimary : Color.clear)
+                )
+                .overlay(alignment: .top) {
+                    Rectangle()
+                        .fill(Theme.Palette.border)
+                        .frame(height: 0.5)
+                }
+            }
+            .background(
+                RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
+                    .fill(Theme.Palette.surface)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
+                    .strokeBorder(
+                        isSelected ? Theme.Palette.textPrimary : Theme.Palette.border,
+                        lineWidth: isSelected ? 1.5 : 1
+                    )
+            )
+            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private var preview: some View {
+        ZStack(alignment: .topLeading) {
+            // Mini "page" preview — adapts to its own forced color scheme so users
+            // see what each mode actually looks like without leaving Settings.
+            switch option {
+            case .system:
+                HStack(spacing: 0) {
+                    miniPage(for: .light)
+                    miniPage(for: .dark)
+                }
+            case .light:
+                miniPage(for: .light)
+            case .dark:
+                miniPage(for: .dark)
+            }
+        }
+        .frame(height: 86)
+        .frame(maxWidth: .infinity)
+    }
+
+    @ViewBuilder
+    private func miniPage(for scheme: ColorScheme) -> some View {
+        let bg: Color = scheme == .light
+            ? Color(red: 0.961, green: 0.949, blue: 0.922)
+            : Color(red: 0.055, green: 0.051, blue: 0.043)
+        let surface: Color = scheme == .light
+            ? Color(red: 0.996, green: 0.992, blue: 0.980)
+            : Color(red: 0.094, green: 0.090, blue: 0.082)
+        let ink: Color = scheme == .light
+            ? Color(red: 0.063, green: 0.055, blue: 0.047)
+            : Color(red: 0.937, green: 0.925, blue: 0.890)
+        let muted: Color = scheme == .light
+            ? Color(red: 0.541, green: 0.514, blue: 0.467)
+            : Color(red: 0.604, green: 0.580, blue: 0.541)
+        let saffron = Color(red: 0.761, green: 0.255, blue: 0.047)
+
+        ZStack(alignment: .topLeading) {
+            bg
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 4) {
+                    Rectangle().fill(saffron).frame(width: 8, height: 1.5)
+                    Rectangle().fill(ink.opacity(0.8)).frame(width: 18, height: 2)
+                }
+                Rectangle().fill(ink).frame(width: 38, height: 4)
+                Rectangle().fill(muted).frame(width: 28, height: 2)
+
+                Rectangle()
+                    .fill(surface)
+                    .frame(height: 14)
+                    .overlay(alignment: .leading) {
+                        HStack(spacing: 3) {
+                            Circle().fill(saffron).frame(width: 5, height: 5)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Rectangle().fill(ink).frame(width: 22, height: 1.5)
+                                Rectangle().fill(muted).frame(width: 32, height: 1)
+                            }
+                        }
+                        .padding(.leading, 4)
+                    }
+                    .overlay(
+                        Rectangle().strokeBorder(ink.opacity(0.10), lineWidth: 0.5)
+                    )
+            }
+            .padding(8)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }

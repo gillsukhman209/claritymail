@@ -168,6 +168,7 @@ struct MailboxView: View {
                 )
             }
             .overlay(alignment: .bottomTrailing) {
+                #if os(macOS)
                 if isShowingComposer {
                     ComposerView(
                         mode: .compose,
@@ -205,6 +206,7 @@ struct MailboxView: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                     .zIndex(20)
                 }
+                #endif
             }
             .overlay(alignment: .bottom) {
                 UndoSendToast()
@@ -307,9 +309,11 @@ struct MailboxView: View {
             }
             .sheet(isPresented: $isShowingBlockedSenders) {
                 BlockedSendersView(accountId: selectedAccountId)
+                    .iosSheetPresentation()
             }
             .sheet(isPresented: $isShowingMutedSenders) {
                 MutedSendersView(accountId: selectedAccountId)
+                    .iosSheetPresentation()
             }
             .sheet(isPresented: $isShowingSettings) {
                 SettingsView(accounts: accounts) {
@@ -318,10 +322,46 @@ struct MailboxView: View {
                         await loadEmails()
                     }
                 }
+                .iosSheetPresentation()
             }
             .sheet(isPresented: $isShowingMorningBrief) {
                 MorningBriefDetailView()
+                    .iosSheetPresentation()
             }
+            #if os(iOS)
+            .sheet(isPresented: $isShowingComposer) {
+                ComposerView(
+                    mode: .compose,
+                    accountId: selectedAccountId,
+                    accounts: accounts,
+                    recipientSuggestions: recipientSuggestions,
+                    onSent: {
+                        Task { await loadEmails() }
+                    },
+                    onClose: {
+                        isShowingComposer = false
+                    }
+                )
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+            }
+            .sheet(item: $draftToEdit) { draft in
+                ComposerView(
+                    mode: .draft(draft),
+                    accountId: selectedAccountId ?? draft.accountId,
+                    accounts: accounts,
+                    recipientSuggestions: recipientSuggestions,
+                    onSent: {
+                        Task { await loadEmails() }
+                    },
+                    onClose: {
+                        draftToEdit = nil
+                    }
+                )
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+            }
+            #endif
             .refreshable {
                 nextPageToken = nil
                 await loadEmails(notifyForNewEmails: false)
@@ -797,7 +837,7 @@ private struct MorningBriefDetailView: View {
 
             content
         }
-        .frame(minWidth: 640, minHeight: 620)
+        .adaptiveSheetFrame(minWidth: 640, minHeight: 620)
         .background(Theme.Palette.background)
         .task {
             await loadBrief()
@@ -1297,6 +1337,28 @@ private struct HideNavigationBarModifier: ViewModifier {
     }
 }
 
+private extension View {
+    @ViewBuilder
+    func iosSheetPresentation() -> some View {
+        #if os(iOS)
+        self
+            .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
+        #else
+        self
+        #endif
+    }
+
+    @ViewBuilder
+    func adaptiveSheetFrame(minWidth: CGFloat, minHeight: CGFloat) -> some View {
+        #if os(iOS)
+        self.frame(maxWidth: .infinity, maxHeight: .infinity)
+        #else
+        self.frame(minWidth: minWidth, minHeight: minHeight)
+        #endif
+    }
+}
+
 // MARK: - Masthead
 
 private struct AuroraHeader: View {
@@ -1776,7 +1838,7 @@ private struct SwipeableEmailRow<Content: View>: View {
                         onTap()
                     }
                 }
-                .gesture(rowDragGesture)
+                .simultaneousGesture(rowDragGesture)
         }
         .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.row, style: .continuous))
         .animation(.snappy(duration: 0.18), value: settledOffset)
@@ -1824,7 +1886,7 @@ private struct SwipeableEmailRow<Content: View>: View {
     }
 
     private var rowDragGesture: some Gesture {
-        DragGesture(minimumDistance: 12, coordinateSpace: .local)
+        DragGesture(minimumDistance: 18, coordinateSpace: .local)
             .updating($dragOffset) { value, state, _ in
                 guard isEnabled, isHorizontalDrag(value) else { return }
                 state = value.translation.width
@@ -1851,7 +1913,7 @@ private struct SwipeableEmailRow<Content: View>: View {
     }
 
     private func isHorizontalDrag(_ value: DragGesture.Value) -> Bool {
-        abs(value.translation.width) > abs(value.translation.height)
+        abs(value.translation.width) > max(24, abs(value.translation.height) * 1.35)
     }
 
     private func clamped(_ value: CGFloat) -> CGFloat {

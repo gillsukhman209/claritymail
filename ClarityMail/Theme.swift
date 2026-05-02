@@ -17,51 +17,61 @@ enum Theme {
     enum Palette {
         // Surfaces — warm paper in light, deep ink in dark
         static let background = adaptive(
-            light: Color(red: 0.957, green: 0.945, blue: 0.918),   // bone        #F4F1EA
+            light: Color(red: 0.961, green: 0.949, blue: 0.922),   // bone        #F5F2EC
             dark:  Color(red: 0.055, green: 0.051, blue: 0.043)    // pitch       #0E0D0B
         )
         static let backgroundElevated = adaptive(
-            light: Color(red: 0.984, green: 0.976, blue: 0.957),   // cream       #FBF9F4
+            light: Color(red: 0.988, green: 0.980, blue: 0.961),   // cream       #FCFAF5
             dark:  Color(red: 0.082, green: 0.075, blue: 0.063)    // ink-1       #151310
         )
         static let surface = adaptive(
-            light: Color.white,
+            light: Color(red: 0.996, green: 0.992, blue: 0.980),   // paper       #FEFDFA — barely-warm white
             dark:  Color(red: 0.094, green: 0.090, blue: 0.082)    // charcoal    #181715
         )
         static let surfaceElevated = adaptive(
-            light: Color.white,
+            light: Color.white,                                     // pure white only on raised panels
             dark:  Color(red: 0.122, green: 0.114, blue: 0.102)    // charcoal-2  #1F1D1A
         )
         static let surfaceMuted = adaptive(
-            light: Color(red: 0.929, green: 0.914, blue: 0.882),   // putty       #EDE9E1
+            light: Color(red: 0.933, green: 0.918, blue: 0.886),   // putty       #EEEAE2
             dark:  Color(red: 0.071, green: 0.067, blue: 0.055)    // pitch-2     #12110E
         )
 
         // Hairlines — thin ink rules, the whole language is built on these
         static let border = adaptive(
-            light: Color(red: 0.078, green: 0.067, blue: 0.059).opacity(0.14),
+            light: Color(red: 0.078, green: 0.067, blue: 0.059).opacity(0.12),
             dark:  Color(red: 0.937, green: 0.925, blue: 0.890).opacity(0.10)
         )
         static let borderStrong = adaptive(
-            light: Color(red: 0.078, green: 0.067, blue: 0.059).opacity(0.32),
+            light: Color(red: 0.078, green: 0.067, blue: 0.059).opacity(0.26),
             dark:  Color(red: 0.937, green: 0.925, blue: 0.890).opacity(0.22)
         )
         static let hairline = adaptive(
-            light: Color(red: 0.078, green: 0.067, blue: 0.059).opacity(0.07),
+            light: Color(red: 0.078, green: 0.067, blue: 0.059).opacity(0.06),
             dark:  Color(red: 0.937, green: 0.925, blue: 0.890).opacity(0.06)
+        )
+
+        /// Drop-shadow color tuned per mode — soft warm ink in light, deep black in dark.
+        static let shadow = adaptive(
+            light: Color(red: 0.078, green: 0.067, blue: 0.059).opacity(0.10),
+            dark:  Color.black.opacity(0.45)
+        )
+        static let shadowSoft = adaptive(
+            light: Color(red: 0.078, green: 0.067, blue: 0.059).opacity(0.06),
+            dark:  Color.black.opacity(0.30)
         )
 
         // Type — ink on bone, bone on pitch
         static let textPrimary = adaptive(
-            light: Color(red: 0.078, green: 0.067, blue: 0.059),   // ink         #14110F
+            light: Color(red: 0.063, green: 0.055, blue: 0.047),   // ink         #100E0C — slightly deeper for crispness
             dark:  Color(red: 0.937, green: 0.925, blue: 0.890)    // bone-bright #EFECE3
         )
         static let textSecondary = adaptive(
-            light: Color(red: 0.420, green: 0.392, blue: 0.353),   // graphite    #6B645A
+            light: Color(red: 0.376, green: 0.349, blue: 0.310),   // graphite    #605950 — bumped for AA contrast on bone
             dark:  Color(red: 0.604, green: 0.580, blue: 0.541)    // pewter      #9A948A
         )
         static let textTertiary = adaptive(
-            light: Color(red: 0.659, green: 0.635, blue: 0.592),   // stone       #A8A297
+            light: Color(red: 0.541, green: 0.514, blue: 0.467),   // stone       #8A8377 — tighter than before
             dark:  Color(red: 0.420, green: 0.392, blue: 0.353)    // graphite    #6B645A
         )
 
@@ -243,7 +253,7 @@ extension View {
                 RoundedRectangle(cornerRadius: radius, style: .continuous)
                     .strokeBorder(Theme.Palette.borderStrong, lineWidth: 1)
             )
-            .shadow(color: Color.black.opacity(0.16), radius: 30, x: 0, y: 18)
+            .shadow(color: Theme.Palette.shadow, radius: 30, x: 0, y: 18)
     }
 
     /// AI-touched surface — single saffron underline, no swirling rainbows.
@@ -416,5 +426,60 @@ struct AuroraAccentIconButtonStyle: ButtonStyle {
             .scaleEffect(configuration.isPressed ? 0.94 : 1)
             .opacity(configuration.isPressed ? 0.85 : 1)
             .animation(Theme.Motion.snappy, value: configuration.isPressed)
+    }
+}
+
+// MARK: - Appearance preference (System / Light / Dark)
+
+/// User-selectable color scheme override, persisted via @AppStorage.
+enum AppearancePreference: String, CaseIterable, Identifiable {
+    case system, light, dark
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .system: return "System"
+        case .light:  return "Light"
+        case .dark:   return "Dark"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .system: return "circle.lefthalf.filled"
+        case .light:  return "sun.max.fill"
+        case .dark:   return "moon.fill"
+        }
+    }
+
+    var colorScheme: ColorScheme? {
+        switch self {
+        case .system: return nil
+        case .light:  return .light
+        case .dark:   return .dark
+        }
+    }
+}
+
+/// Storage key shared between the modifier and the settings UI.
+enum AppearanceStorage {
+    static let key = "appearancePreference"
+}
+
+/// Applies the user's persisted appearance preference at the root of the view tree.
+private struct AppearancePreferenceModifier: ViewModifier {
+    @AppStorage(AppearanceStorage.key) private var raw: String = AppearancePreference.system.rawValue
+
+    func body(content: Content) -> some View {
+        let preference = AppearancePreference(rawValue: raw) ?? .system
+        content.preferredColorScheme(preference.colorScheme)
+    }
+}
+
+extension View {
+    /// Apply the user's saved Light/Dark/System preference.
+    func appearancePreference() -> some View {
+        modifier(AppearancePreferenceModifier())
     }
 }
