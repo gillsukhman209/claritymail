@@ -9,7 +9,12 @@ import {
 } from "../db/accounts.repo.js";
 import { saveDeviceToken } from "../db/deviceTokens.repo.js";
 import { listBlockedSenderEmails, filterBlockedEmails } from "../db/blockedSenders.repo.js";
-import { filterMutedEmails, listMutedSenderEmails } from "../db/mutedSenders.repo.js";
+import {
+  filterMutedEmails,
+  filterMutedSuppressedEmails,
+  listMutedSenderEmails,
+  listMutedSenderNotificationSuppressions
+} from "../db/mutedSenders.repo.js";
 import { getEmail, getUnreadInboxEstimate, listGmailHistory, startGmailWatch } from "../services/gmail.service.js";
 import { notifyDevicesForEmail } from "../services/apns.service.js";
 
@@ -58,6 +63,7 @@ async function notifyFreshInboxMessages(account: NonNullable<Awaited<ReturnType<
 
   const blockedSenders = await listBlockedSenderEmails(account.id);
   const mutedSenders = await listMutedSenderEmails(account.id);
+  const mutedSuppressions = await listMutedSenderNotificationSuppressions(account.id);
   const emails = await Promise.all(
     messageIds.slice(0, 5).map(async (messageId) => {
       try {
@@ -68,12 +74,15 @@ async function notifyFreshInboxMessages(account: NonNullable<Awaited<ReturnType<
     })
   );
 
-  const notifyableEmails = filterMutedEmails(
-    filterBlockedEmails(
-      emails.filter((email): email is NonNullable<typeof email> => Boolean(email)),
-      blockedSenders
+  const notifyableEmails = filterMutedSuppressedEmails(
+    filterMutedEmails(
+      filterBlockedEmails(
+        emails.filter((email): email is NonNullable<typeof email> => Boolean(email)),
+        blockedSenders
+      ),
+      mutedSenders
     ),
-    mutedSenders
+    mutedSuppressions
   ).filter(isFreshUnreadEmail);
 
   if (notifyableEmails.length === 0) return;

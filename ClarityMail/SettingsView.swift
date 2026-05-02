@@ -26,62 +26,73 @@ struct SettingsView: View {
             header
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 28) {
                     sendingSection
                     morningBriefSection
                     accountsSection
 
                     if let errorMessage {
-                        Text(errorMessage)
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(Theme.Palette.warm)
-                            .padding(.top, 2)
+                        HStack(spacing: 8) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.system(size: 11, weight: .heavy))
+                            Text(errorMessage.uppercased())
+                                .font(Theme.Typography.mono(11, weight: .semibold))
+                                .tracking(1.2)
+                        }
+                        .foregroundStyle(Theme.Palette.danger)
                     }
                 }
-                .padding(22)
+                .padding(.horizontal, 26)
+                .padding(.vertical, 24)
             }
         }
-        .frame(width: 560, height: 460)
+        .frame(width: 600, height: 520)
         .background(Theme.Palette.background)
-        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
+            RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
                 .strokeBorder(Theme.Palette.borderStrong, lineWidth: 1)
         )
-        .shadow(color: .black.opacity(0.28), radius: 30, x: 0, y: 16)
+        .shadow(color: .black.opacity(0.20), radius: 36, x: 0, y: 18)
         .task {
             await loadMorningBrief()
         }
     }
 
     private var header: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Settings")
-                    .font(.system(size: 22, weight: .semibold))
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .center, spacing: 10) {
+                Rectangle()
+                    .fill(Theme.Palette.accent)
+                    .frame(width: 14, height: 1.5)
+                Text("Configuration".uppercased())
+                    .font(Theme.Typography.eyebrow(11))
+                    .tracking(2.4)
                     .foregroundStyle(Theme.Palette.textPrimary)
 
-                Text("Sending and connected Gmail accounts")
-                    .font(.system(size: 13))
-                    .foregroundStyle(Theme.Palette.textTertiary)
+                Spacer()
+
+                Button("Done") { dismiss() }
+                    .buttonStyle(AuroraPrimaryButtonStyle(compact: true))
             }
 
-            Spacer()
+            Text("Settings")
+                .font(.system(size: 28, weight: .bold, design: .serif))
+                .foregroundStyle(Theme.Palette.textPrimary)
 
-            Button("Done") {
-                dismiss()
-            }
-            .buttonStyle(.plain)
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(.white)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 9)
-            .background(Theme.Palette.accent)
-            .clipShape(Capsule())
+            Text("Sending behavior · Morning brief · Connected accounts".uppercased())
+                .font(Theme.Typography.mono(10, weight: .semibold))
+                .tracking(1.4)
+                .foregroundStyle(Theme.Palette.textTertiary)
         }
-        .padding(.horizontal, 22)
-        .padding(.vertical, 18)
-        .background(Theme.Palette.surface.opacity(0.7))
+        .padding(.horizontal, 26)
+        .padding(.top, 22)
+        .padding(.bottom, 18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay(
+            Rectangle().fill(Theme.Palette.borderStrong).frame(height: 1),
+            alignment: .bottom
+        )
     }
 
     private var sendingSection: some View {
@@ -100,23 +111,32 @@ struct SettingsView: View {
                     Spacer()
                 }
 
-                HStack(spacing: 8) {
-                    ForEach([0, 5, 10, 15, 30], id: \.self) { seconds in
+                HStack(spacing: 0) {
+                    ForEach(Array([0, 5, 10, 15, 30].enumerated()), id: \.element) { index, seconds in
                         Button {
-                            undoSendDelaySeconds = seconds
+                            withAnimation(Theme.Motion.snappy) { undoSendDelaySeconds = seconds }
                         } label: {
-                            Text(seconds == 0 ? "Off" : "\(seconds)s")
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundStyle(undoSendDelaySeconds == seconds ? .white : Theme.Palette.textSecondary)
-                                .frame(width: 54, height: 30)
-                                .background(
-                                    Capsule()
-                                        .fill(undoSendDelaySeconds == seconds ? Theme.Palette.accent : Theme.Palette.surfaceElevated.opacity(0.72))
-                                )
+                            Text(seconds == 0 ? "OFF" : "\(seconds)S")
+                                .font(Theme.Typography.mono(11, weight: .heavy))
+                                .tracking(1.4)
+                                .foregroundStyle(undoSendDelaySeconds == seconds ? Theme.Palette.background : Theme.Palette.textSecondary)
+                                .frame(width: 56, height: 32)
+                                .background(undoSendDelaySeconds == seconds ? Theme.Palette.textPrimary : Color.clear)
                         }
                         .buttonStyle(.plain)
+                        .overlay(alignment: .trailing) {
+                            if index < 4 {
+                                Rectangle()
+                                    .fill(Theme.Palette.border)
+                                    .frame(width: 0.5)
+                            }
+                        }
                     }
                 }
+                .overlay(
+                    Rectangle()
+                        .strokeBorder(Theme.Palette.borderStrong, lineWidth: 1)
+                )
             }
         }
     }
@@ -171,23 +191,32 @@ struct SettingsView: View {
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(Theme.Palette.textPrimary)
 
-                    HStack(spacing: 8) {
-                        ForEach([10, 12, 14, 16, 20], id: \.self) { hours in
+                    HStack(spacing: 0) {
+                        ForEach(Array([10, 12, 14, 16, 20].enumerated()), id: \.element) { index, hours in
                             Button {
-                                briefSettings.lookbackHours = hours
+                                withAnimation(Theme.Motion.snappy) { briefSettings.lookbackHours = hours }
                             } label: {
-                                Text("\(hours)h")
-                                    .font(.system(size: 12, weight: .semibold))
-                                    .foregroundStyle(briefSettings.lookbackHours == hours ? .white : Theme.Palette.textSecondary)
-                                    .frame(width: 48, height: 30)
-                                    .background(
-                                        Capsule()
-                                            .fill(briefSettings.lookbackHours == hours ? Theme.Palette.accent : Theme.Palette.surfaceElevated.opacity(0.72))
-                                    )
+                                Text("\(hours)H")
+                                    .font(Theme.Typography.mono(11, weight: .heavy))
+                                    .tracking(1.4)
+                                    .foregroundStyle(briefSettings.lookbackHours == hours ? Theme.Palette.background : Theme.Palette.textSecondary)
+                                    .frame(width: 52, height: 32)
+                                    .background(briefSettings.lookbackHours == hours ? Theme.Palette.textPrimary : Color.clear)
                             }
                             .buttonStyle(.plain)
+                            .overlay(alignment: .trailing) {
+                                if index < 4 {
+                                    Rectangle()
+                                        .fill(Theme.Palette.border)
+                                        .frame(width: 0.5)
+                                }
+                            }
                         }
                     }
+                    .overlay(
+                        Rectangle()
+                            .strokeBorder(Theme.Palette.borderStrong, lineWidth: 1)
+                    )
                 }
 
                 Toggle("Unread emails only", isOn: $briefSettings.unreadOnly)
@@ -327,23 +356,22 @@ private struct MorningBriefPreview: View {
             }
         }
         .padding(14)
-        .background(
-            RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous)
-                .fill(Theme.Palette.background.opacity(0.42))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous)
-                .strokeBorder(Theme.Palette.border, lineWidth: 1)
-        )
+        .background(Theme.Palette.surfaceMuted)
+        .overlay(alignment: .leading) {
+            Rectangle()
+                .fill(Theme.Palette.accent)
+                .frame(width: 2)
+        }
     }
 
     private func briefGroup(_ title: String, items: [MorningBriefItem]) -> some View {
         Group {
             if !items.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(title)
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(Theme.Palette.textPrimary)
+                    Text(title.uppercased())
+                        .font(Theme.Typography.mono(10, weight: .heavy))
+                        .tracking(1.6)
+                        .foregroundStyle(Theme.Palette.accent)
 
                     ForEach(items.prefix(3)) { item in
                         VStack(alignment: .leading, spacing: 3) {
@@ -368,15 +396,21 @@ private struct SettingsActionButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 12, weight: .semibold))
-            .foregroundStyle(isPrimary ? .white : Theme.Palette.textPrimary)
-            .padding(.horizontal, 13)
-            .padding(.vertical, 9)
+            .font(.system(size: 12, weight: .semibold, design: .serif))
+            .tracking(0.4)
+            .foregroundStyle(isPrimary ? Theme.Palette.background : Theme.Palette.textPrimary)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
             .background(
-                Capsule()
-                    .fill(isPrimary ? Theme.Palette.accent : Theme.Palette.surfaceElevated.opacity(0.72))
+                RoundedRectangle(cornerRadius: Theme.Radius.button, style: .continuous)
+                    .fill(isPrimary ? Theme.Palette.textPrimary : Theme.Palette.background)
             )
-            .opacity(configuration.isPressed ? 0.75 : 1)
+            .overlay(
+                RoundedRectangle(cornerRadius: Theme.Radius.button, style: .continuous)
+                    .strokeBorder(isPrimary ? Color.clear : Theme.Palette.borderStrong, lineWidth: 1)
+            )
+            .opacity(configuration.isPressed ? 0.82 : 1)
+            .scaleEffect(configuration.isPressed ? 0.98 : 1)
     }
 }
 
@@ -393,29 +427,16 @@ private struct SettingsCard<Content: View>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 9) {
-                Image(systemName: systemImage)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Theme.Palette.accentSoft)
-                    .frame(width: 24, height: 24)
-                    .background(Circle().fill(Theme.Palette.accent.opacity(0.14)))
-
-                Text(title)
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(Theme.Palette.textPrimary)
-            }
-
+            EyebrowLabel(text: title, accent: Theme.Palette.accent)
             content
         }
-        .padding(16)
-        .background(
-            RoundedRectangle(cornerRadius: Theme.Radius.row, style: .continuous)
-                .fill(Theme.Palette.surface.opacity(0.82))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: Theme.Radius.row, style: .continuous)
-                .strokeBorder(Theme.Palette.border, lineWidth: 1)
-        )
+        .padding(.bottom, 22)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(Theme.Palette.border)
+                .frame(height: 0.5)
+        }
     }
 }
 
@@ -425,42 +446,49 @@ private struct AccountSettingsRow: View {
     let onLogout: () -> Void
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 14) {
             Text(initials)
-                .font(.system(size: 12, weight: .bold))
-                .foregroundStyle(.white)
-                .frame(width: 34, height: 34)
-                .background(Circle().fill(Theme.Palette.accentDeep))
+                .font(.system(size: 13, weight: .bold, design: .serif))
+                .foregroundStyle(Theme.Palette.background)
+                .frame(width: 32, height: 32)
+                .background(
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill(Theme.Palette.textPrimary)
+                )
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(account.email)
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(Theme.Palette.textPrimary)
                     .lineLimit(1)
-                Text("Gmail")
-                    .font(.system(size: 12))
+                Text("GMAIL · CONNECTED")
+                    .font(Theme.Typography.mono(9, weight: .heavy))
+                    .tracking(1.6)
                     .foregroundStyle(Theme.Palette.textTertiary)
             }
 
             Spacer()
 
             Button(role: .destructive, action: onLogout) {
-                Text("Log Out")
-                    .font(.system(size: 12, weight: .semibold))
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(Theme.Palette.warm.opacity(0.12))
-                    .clipShape(Capsule())
+                Text("LOG OUT")
+                    .font(Theme.Typography.mono(10, weight: .heavy))
+                    .tracking(1.4)
+                    .foregroundStyle(Theme.Palette.danger)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
+                    .overlay(
+                        Rectangle().strokeBorder(Theme.Palette.danger, lineWidth: 1)
+                    )
             }
             .buttonStyle(.plain)
-            .foregroundStyle(Theme.Palette.warm)
             .disabled(isWorking)
         }
-        .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous)
-                .fill(Theme.Palette.surfaceElevated.opacity(0.58))
-        )
+        .padding(.vertical, 10)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(Theme.Palette.border)
+                .frame(height: 0.5)
+        }
     }
 
     private var initials: String {

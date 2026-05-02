@@ -17,6 +17,7 @@ struct EmailDetailView: View {
     let recipientSuggestions: [EmailContact]
     let onBlockedSender: ((String) -> Void)?
     let onPrioritySenderChanged: ((String, Bool) -> Void)?
+    let onMutedSenderChanged: ((String, Bool) -> Void)?
     @Environment(\.dismiss) private var dismiss
     @State private var loadedEmail: Email?
     @State private var threadEmails: [Email] = []
@@ -41,31 +42,62 @@ struct EmailDetailView: View {
             Theme.Palette.background.ignoresSafeArea()
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
+                VStack(alignment: .leading, spacing: 0) {
+                    actionBar
+                        .padding(.horizontal, 22)
+                        .padding(.top, 14)
+                        .padding(.bottom, 14)
+
+                    Rectangle()
+                        .fill(Theme.Palette.borderStrong)
+                        .frame(height: 1)
+
                     headerSection
+                        .padding(.horizontal, 22)
+                        .padding(.top, 26)
+                        .padding(.bottom, 22)
 
                     deliveryDetailsCard
+                        .padding(.horizontal, 22)
+                        .padding(.bottom, 22)
 
                     summaryCard
+                        .padding(.horizontal, 22)
+                        .padding(.bottom, 22)
 
                     if let errorMessage {
-                        Text(errorMessage)
-                            .font(.system(size: 13))
-                            .foregroundStyle(Theme.Palette.warm)
+                        HStack(spacing: 8) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.system(size: 11, weight: .heavy))
+                            Text(errorMessage.uppercased())
+                                .font(Theme.Typography.mono(11, weight: .semibold))
+                                .tracking(1.2)
+                        }
+                        .foregroundStyle(Theme.Palette.danger)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .overlay(
+                            Rectangle()
+                                .strokeBorder(Theme.Palette.danger.opacity(0.4), lineWidth: 1)
+                        )
+                        .padding(.horizontal, 22)
+                        .padding(.bottom, 18)
                     }
 
                     threadSection
+                        .padding(.horizontal, 22)
+                        .padding(.bottom, 22)
 
                     if isLoading && loadedEmail == nil {
                         ProgressView()
                             .frame(maxWidth: .infinity)
-                            .padding(.vertical, 12)
+                            .padding(.vertical, 28)
                     }
+
+                    Color.clear.frame(height: 40)
                 }
                 .frame(maxWidth: 760, alignment: .leading)
-                .padding(.horizontal, 22)
-                .padding(.top, 12)
-                .padding(.bottom, 40)
             }
             .scrollIndicators(.hidden)
 
@@ -94,93 +126,6 @@ struct EmailDetailView: View {
             .disabled(isPerformingAction || isShowingReply)
             .opacity(0)
         }
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    isShowingReply = true
-                } label: {
-                    Label("Reply", systemImage: "arrowshape.turn.up.left")
-                }
-                .disabled(isPerformingAction)
-                .keyboardShortcut("r", modifiers: [.command])
-            }
-
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    isShowingForward = true
-                } label: {
-                    Label("Forward", systemImage: "arrowshape.turn.up.right")
-                }
-                .disabled(isPerformingAction)
-                .keyboardShortcut("f", modifiers: [.command, .shift])
-            }
-
-            ToolbarItem(placement: .primaryAction) {
-                Menu {
-                    Button {
-                        Task { await toggleStar() }
-                    } label: {
-                        Label(visibleEmail.isStarred ? "Unstar" : "Star",
-                              systemImage: visibleEmail.isStarred ? "star.fill" : "star")
-                    }
-                    .keyboardShortcut("l", modifiers: [.command])
-
-                    Button {
-                        Task { await togglePin() }
-                    } label: {
-                        Label(visibleEmail.isPinned == true ? "Unpin" : "Pin",
-                              systemImage: visibleEmail.isPinned == true ? "pin.slash" : "pin")
-                    }
-
-                    Button {
-                        Task { await toggleRead() }
-                    } label: {
-                        Label(visibleEmail.isRead ? "Mark Unread" : "Mark Read",
-                              systemImage: visibleEmail.isRead ? "envelope.badge" : "envelope.open")
-                    }
-                    .keyboardShortcut("u", modifiers: [.command])
-
-                    Button {
-                        Task { await archive() }
-                    } label: {
-                        Label("Archive", systemImage: "archivebox")
-                    }
-                    .keyboardShortcut("e", modifiers: [.command])
-
-                    Button(role: .destructive) {
-                        Task { await trash() }
-                    } label: {
-                        Label("Trash", systemImage: "trash")
-                    }
-
-                    Button(role: .destructive) {
-                        Task { await blockSender() }
-                    } label: {
-                        Label("Block Sender", systemImage: "hand.raised")
-                    }
-                    .keyboardShortcut("b", modifiers: [.command])
-
-                    Divider()
-
-                    if visibleEmail.isManualPrioritySender {
-                        Button {
-                            Task { await removeImportantSender() }
-                        } label: {
-                            Label("Remove Important Sender", systemImage: "bolt.slash")
-                        }
-                    } else {
-                        Button {
-                            Task { await markImportantSender() }
-                        } label: {
-                            Label("Mark Sender Important", systemImage: "bolt.circle")
-                        }
-                    }
-                } label: {
-                    Image(systemName: "ellipsis.circle")
-                }
-                .disabled(isPerformingAction)
-            }
-        }
         .task(id: email.id) {
             await loadEmail()
             await loadSummary()
@@ -188,64 +133,176 @@ struct EmailDetailView: View {
         .tint(Theme.Palette.accent)
     }
 
-    private var headerSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(visibleEmail.subject)
-                .font(.system(size: 24, weight: .semibold))
-                .foregroundStyle(Theme.Palette.textPrimary)
+    private var actionBar: some View {
+        HStack(spacing: 10) {
+            Button {
+                #if os(iOS)
+                dismiss()
+                #endif
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 11, weight: .heavy))
+                    Text("Inbox".uppercased())
+                        .font(Theme.Typography.mono(10, weight: .semibold))
+                        .tracking(1.6)
+                }
+                .foregroundStyle(Theme.Palette.textSecondary)
+            }
+            .buttonStyle(.plain)
+            #if os(macOS)
+            .opacity(0)
+            .frame(width: 0, height: 0)
+            #endif
 
-            HStack(spacing: 10) {
+            Spacer()
+
+            Button { isShowingReply = true } label: {
+                Text("Reply")
+            }
+            .buttonStyle(AuroraPrimaryButtonStyle(compact: true))
+            .disabled(isPerformingAction)
+            .keyboardShortcut("r", modifiers: [.command])
+
+            Button { isShowingForward = true } label: {
+                Image(systemName: "arrowshape.turn.up.right")
+            }
+            .buttonStyle(AuroraIconButtonStyle(size: 30))
+            .disabled(isPerformingAction)
+            .keyboardShortcut("f", modifiers: [.command, .shift])
+
+            Menu {
+                Button { Task { await toggleStar() } } label: {
+                    Label(visibleEmail.isStarred ? "Unstar" : "Star",
+                          systemImage: visibleEmail.isStarred ? "star.fill" : "star")
+                }
+                .keyboardShortcut("l", modifiers: [.command])
+
+                Button { Task { await togglePin() } } label: {
+                    Label(visibleEmail.isPinned == true ? "Unpin" : "Pin",
+                          systemImage: visibleEmail.isPinned == true ? "pin.slash" : "pin")
+                }
+
+                Button { Task { await toggleRead() } } label: {
+                    Label(visibleEmail.isRead ? "Mark Unread" : "Mark Read",
+                          systemImage: visibleEmail.isRead ? "envelope.badge" : "envelope.open")
+                }
+                .keyboardShortcut("u", modifiers: [.command])
+
+                Button { Task { await archive() } } label: {
+                    Label("Archive", systemImage: "archivebox")
+                }
+                .keyboardShortcut("e", modifiers: [.command])
+
+                Button(role: .destructive) { Task { await trash() } } label: {
+                    Label("Trash", systemImage: "trash")
+                }
+
+                Button(role: .destructive) { Task { await blockSender() } } label: {
+                    Label("Block Sender", systemImage: "hand.raised")
+                }
+                .keyboardShortcut("b", modifiers: [.command])
+
+                if visibleEmail.isMutedSender == true {
+                    Button { Task { await unmuteSender() } } label: {
+                        Label("Unmute Sender", systemImage: "bell")
+                    }
+                } else {
+                    Button { Task { await muteSender() } } label: {
+                        Label("Mute Sender", systemImage: "bell.slash")
+                    }
+                }
+
+                Divider()
+
+                if visibleEmail.isManualPrioritySender {
+                    Button { Task { await removeImportantSender() } } label: {
+                        Label("Remove Important Sender", systemImage: "bolt.slash")
+                    }
+                } else {
+                    Button { Task { await markImportantSender() } } label: {
+                        Label("Mark Sender Important", systemImage: "bolt.circle")
+                    }
+                }
+            } label: {
+                Image(systemName: "ellipsis")
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .frame(width: 30, height: 30)
+            .overlay(
+                RoundedRectangle(cornerRadius: Theme.Radius.button, style: .continuous)
+                    .strokeBorder(Theme.Palette.border, lineWidth: 1)
+            )
+            .disabled(isPerformingAction)
+        }
+    }
+
+    private var headerSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            EyebrowLabel(
+                text: "Dispatch",
+                trailing: visibleEmail.receivedAt.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day().hour().minute()),
+                accent: Theme.Palette.accent
+            )
+
+            Text(visibleEmail.subject)
+                .font(.system(size: 30, weight: .bold, design: .serif))
+                .foregroundStyle(Theme.Palette.textPrimary)
+                .lineSpacing(2)
+                .textSelection(.enabled)
+
+            HStack(spacing: 12) {
                 SenderLogoView(email: visibleEmail, size: 36)
 
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(visibleEmail.sender)
-                        .font(.system(size: 14, weight: .medium))
+                    Text(visibleEmail.senderDisplayName)
+                        .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(Theme.Palette.textPrimary)
                         .lineLimit(1)
-                    Text(visibleEmail.receivedAt, style: .date)
-                        .font(.system(size: 12))
+                    Text(visibleEmail.senderEmailAddress)
+                        .font(Theme.Typography.mono(11))
                         .foregroundStyle(Theme.Palette.textTertiary)
+                        .lineLimit(1)
                 }
+
                 Spacer()
             }
+            .padding(.top, 4)
         }
     }
 
     private var deliveryDetailsCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 0) {
             DeliveryDetailRow(
                 title: "From",
                 primary: visibleEmail.senderEmailAddress,
                 secondary: visibleEmail.senderDisplayName
             )
-
-            Divider().overlay(Theme.Palette.border)
+            .dossierDivider()
 
             DeliveryDetailRow(
                 title: "To",
                 primary: toDisplayText,
                 secondary: receivedAccountText
             )
+            .dossierDivider()
 
             if let cc = visibleEmail.cc?.trimmingCharacters(in: .whitespacesAndNewlines), !cc.isEmpty {
-                Divider().overlay(Theme.Palette.border)
                 DeliveryDetailRow(title: "Cc", primary: cc, secondary: nil)
+                    .dossierDivider()
             }
 
             if let bcc = visibleEmail.bcc?.trimmingCharacters(in: .whitespacesAndNewlines), !bcc.isEmpty {
-                Divider().overlay(Theme.Palette.border)
                 DeliveryDetailRow(title: "Bcc", primary: bcc, secondary: nil)
+                    .dossierDivider()
             }
         }
-        .padding(14)
-        .background(
-            RoundedRectangle(cornerRadius: Theme.Radius.row, style: .continuous)
-                .fill(Theme.Palette.surface.opacity(0.58))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: Theme.Radius.row, style: .continuous)
-                .strokeBorder(Theme.Palette.border, lineWidth: 1)
-        )
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(Theme.Palette.border)
+                .frame(height: 0.5)
+        }
     }
 
     private var toDisplayText: String {
@@ -267,47 +324,57 @@ struct EmailDetailView: View {
     }
 
     private var summaryCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                Image(systemName: "sparkles")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Theme.Palette.accentSoft)
-                Text("AI SUMMARY")
-                    .font(.system(size: 11, weight: .semibold))
-                    .tracking(1.4)
-                    .foregroundStyle(Theme.Palette.accentSoft)
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .center, spacing: 10) {
+                Rectangle()
+                    .fill(Theme.Palette.accent)
+                    .frame(width: 18, height: 1.5)
+                Text("Editor's Summary".uppercased())
+                    .font(Theme.Typography.eyebrow())
+                    .tracking(2.4)
+                    .foregroundStyle(Theme.Palette.accent)
+
                 Spacer()
+
                 if isLoadingSummary {
-                    ProgressView()
-                        .scaleEffect(0.75)
+                    ProgressView().scaleEffect(0.6)
+                } else {
+                    Text("AI · GPT")
+                        .font(Theme.Typography.mono(9, weight: .semibold))
+                        .tracking(1.4)
+                        .foregroundStyle(Theme.Palette.textTertiary)
                 }
             }
 
             SummaryContentView(summary: summary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(18)
-        .background(
-            RoundedRectangle(cornerRadius: Theme.Radius.row, style: .continuous)
-                .fill(Theme.Palette.surface.opacity(0.6))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: Theme.Radius.row, style: .continuous)
-                .strokeBorder(Theme.Palette.border, lineWidth: 1)
-        )
+        .padding(.horizontal, 16)
+        .padding(.vertical, 18)
+        .background(Theme.Palette.surfaceMuted)
+        .overlay(alignment: .leading) {
+            Rectangle()
+                .fill(Theme.Palette.accent)
+                .frame(width: 2)
+        }
     }
 
     @ViewBuilder
     private var threadSection: some View {
         let messages = threadEmails.isEmpty ? [visibleEmail] : threadEmails
-        VStack(alignment: .leading, spacing: 14) {
-            if messages.count > 1 {
-                Text("\(messages.count) messages in this conversation")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Theme.Palette.textTertiary)
-            }
+        VStack(alignment: .leading, spacing: 22) {
+            EyebrowLabel(
+                text: messages.count > 1 ? "Conversation — \(messages.count) entries" : "Body",
+                accent: Theme.Palette.accent
+            )
 
-            ForEach(messages) { message in
+            ForEach(Array(messages.enumerated()), id: \.element.id) { index, message in
+                if index > 0 {
+                    Rectangle()
+                        .fill(Theme.Palette.border)
+                        .frame(height: 0.5)
+                        .padding(.vertical, 4)
+                }
                 ThreadMessageView(
                     email: message,
                     attachmentData: attachmentData,
@@ -509,6 +576,34 @@ struct EmailDetailView: View {
         }
     }
 
+    private func muteSender() async {
+        var mutedSenderEmail: String?
+
+        await performAction {
+            mutedSenderEmail = try await apiClient.muteSender(id: visibleEmail.id, accountId: accountId)
+        }
+
+        if errorMessage == nil, let mutedSenderEmail {
+            applyMutedSenderChange(senderEmail: mutedSenderEmail, isMuted: true)
+        }
+    }
+
+    private func unmuteSender() async {
+        guard let resolvedAccountId = visibleEmail.accountId ?? accountId else {
+            errorMessage = "Could not unmute sender."
+            return
+        }
+
+        let senderEmail = visibleEmail.senderEmailAddress
+        await performAction {
+            try await apiClient.unmuteSender(accountId: resolvedAccountId, senderEmail: senderEmail)
+        }
+
+        if errorMessage == nil {
+            applyMutedSenderChange(senderEmail: senderEmail, isMuted: false)
+        }
+    }
+
     private func markImportantSender() async {
         var importantSenderEmail: String?
 
@@ -548,6 +643,15 @@ struct EmailDetailView: View {
         onPrioritySenderChanged?(senderEmail.lowercased(), isImportant)
     }
 
+    private func applyMutedSenderChange(senderEmail: String, isMuted: Bool) {
+        if loadedEmail == nil {
+            loadedEmail = email
+        }
+
+        loadedEmail?.isMutedSender = isMuted
+        onMutedSenderChanged?(senderEmail.lowercased(), isMuted)
+    }
+
     private func performAction(_ action: () async throws -> Void) async {
         isPerformingAction = true
         defer { isPerformingAction = false }
@@ -567,22 +671,23 @@ private struct DeliveryDetailRow: View {
     let secondary: String?
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Text(title)
-                .font(.system(size: 12, weight: .semibold))
+        HStack(alignment: .firstTextBaseline, spacing: 18) {
+            Text(title.uppercased())
+                .font(Theme.Typography.mono(10, weight: .heavy))
+                .tracking(1.8)
                 .foregroundStyle(Theme.Palette.textTertiary)
                 .frame(width: 44, alignment: .leading)
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(primary)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: 13))
                     .foregroundStyle(Theme.Palette.textPrimary)
                     .lineLimit(3)
                     .textSelection(.enabled)
 
                 if let secondary, !secondary.isEmpty, secondary.caseInsensitiveCompare(primary) != .orderedSame {
                     Text(secondary)
-                        .font(.system(size: 12))
+                        .font(Theme.Typography.mono(10, weight: .medium))
                         .foregroundStyle(Theme.Palette.textTertiary)
                         .lineLimit(2)
                         .textSelection(.enabled)
@@ -591,6 +696,7 @@ private struct DeliveryDetailRow: View {
 
             Spacer(minLength: 0)
         }
+        .padding(.vertical, 11)
     }
 }
 
@@ -611,14 +717,14 @@ private struct AttachmentPreview: View {
             Button {
                 onOpen()
             } label: {
-                HStack(spacing: 10) {
+                HStack(spacing: 12) {
                     Image(systemName: attachmentIcon(for: attachment.mimeType))
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(Theme.Palette.accentSoft)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(Theme.Palette.background)
                         .frame(width: 28, height: 28)
                         .background(
-                            Circle()
-                                .fill(Theme.Palette.accent.opacity(0.12))
+                            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                .fill(Theme.Palette.accent)
                         )
 
                     VStack(alignment: .leading, spacing: 2) {
@@ -626,8 +732,9 @@ private struct AttachmentPreview: View {
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(Theme.Palette.textPrimary)
                             .lineLimit(1)
-                        Text(detailText)
-                            .font(.system(size: 11))
+                        Text(detailText.uppercased())
+                            .font(Theme.Typography.mono(9, weight: .semibold))
+                            .tracking(1.2)
                             .foregroundStyle(Theme.Palette.textTertiary)
                             .lineLimit(1)
                     }
@@ -636,20 +743,17 @@ private struct AttachmentPreview: View {
 
                     if isLoading {
                         ProgressView()
-                            .scaleEffect(0.7)
+                            .scaleEffect(0.6)
                     } else {
-                        Image(systemName: "arrow.up.right.square")
-                            .font(.system(size: 13, weight: .semibold))
+                        Image(systemName: "arrow.up.right")
+                            .font(.system(size: 11, weight: .heavy))
                             .foregroundStyle(Theme.Palette.textTertiary)
                     }
                 }
-                .padding(12)
-                .background(
-                    RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous)
-                        .fill(Theme.Palette.surface.opacity(0.72))
-                )
+                .padding(.horizontal, 12)
+                .padding(.vertical, 11)
                 .overlay(
-                    RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous)
+                    Rectangle()
                         .strokeBorder(Theme.Palette.border, lineWidth: 1)
                 )
             }
@@ -718,29 +822,36 @@ private struct ThreadMessageView: View {
     let onOpenAttachment: (EmailAttachment) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 10) {
-                SenderLogoView(email: email, size: 30)
+                SenderLogoView(email: email, size: 28)
 
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: 1) {
                     Text(email.sender)
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(Theme.Palette.textPrimary)
                         .lineLimit(1)
                     Text(email.receivedAt, style: .date)
-                        .font(.system(size: 11))
+                        .font(Theme.Typography.mono(10))
                         .foregroundStyle(Theme.Palette.textTertiary)
                 }
 
                 Spacer()
             }
+            .padding(.bottom, 4)
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(Theme.Palette.border)
+                    .frame(height: 0.5)
+            }
 
             let attachments = email.attachments ?? []
             if !attachments.isEmpty {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("\(attachments.count) attachment\(attachments.count == 1 ? "" : "s")")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(Theme.Palette.textTertiary)
+                VStack(alignment: .leading, spacing: 8) {
+                    EyebrowLabel(
+                        text: "\(attachments.count) attachment\(attachments.count == 1 ? "" : "s")",
+                        accent: Theme.Palette.accent
+                    )
 
                     ForEach(attachments) { attachment in
                         AttachmentPreview(
@@ -753,6 +864,7 @@ private struct ThreadMessageView: View {
                         )
                     }
                 }
+                .padding(.bottom, 4)
             }
 
             EmailHTMLView(
@@ -760,15 +872,7 @@ private struct ThreadMessageView: View {
                 plainText: email.body ?? email.snippet
             )
         }
-        .padding(16)
-        .background(
-            RoundedRectangle(cornerRadius: Theme.Radius.row, style: .continuous)
-                .fill(Theme.Palette.surface.opacity(0.5))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: Theme.Radius.row, style: .continuous)
-                .strokeBorder(Theme.Palette.border, lineWidth: 1)
-        )
+        .padding(.vertical, 4)
     }
 }
 
@@ -809,32 +913,36 @@ private struct SummaryContentView: View {
         if let cleanedSummary {
             VStack(alignment: .leading, spacing: 12) {
                 Text(cleanedSummary.summary)
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(Theme.Palette.textPrimary.opacity(0.92))
-                    .lineSpacing(3)
+                    .font(.system(size: 15, design: .serif))
+                    .foregroundStyle(Theme.Palette.textPrimary)
+                    .lineSpacing(4)
                     .textSelection(.enabled)
 
                 if let action = cleanedSummary.action {
-                    HStack(alignment: .top, spacing: 8) {
-                        Image(systemName: "checkmark.circle.fill")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(Theme.Palette.accentSoft)
-                            .padding(.top, 2)
+                    HStack(alignment: .top, spacing: 10) {
+                        Text("ACTION")
+                            .font(Theme.Typography.mono(9, weight: .heavy))
+                            .tracking(1.4)
+                            .foregroundStyle(Theme.Palette.accent)
+                            .padding(.top, 3)
 
                         Text(action)
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(Theme.Palette.textSecondary)
+                            .font(.system(size: 13))
+                            .foregroundStyle(Theme.Palette.textPrimary)
                             .lineSpacing(2)
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
-                    .background(Theme.Palette.surfaceElevated.opacity(0.65))
-                    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.button, style: .continuous))
+                    .padding(.top, 4)
+                    .overlay(alignment: .top) {
+                        Rectangle()
+                            .fill(Theme.Palette.border)
+                            .frame(height: 0.5)
+                    }
                 }
             }
         } else {
-            Text("Summarizing this email...")
-                .font(.system(size: 14))
+            Text("Composing summary…".uppercased())
+                .font(Theme.Typography.mono(11, weight: .semibold))
+                .tracking(1.4)
                 .foregroundStyle(Theme.Palette.textSecondary)
         }
     }

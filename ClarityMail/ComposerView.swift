@@ -157,9 +157,14 @@ struct ComposerView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 10) {
-                Text(title)
-                    .font(.system(size: 14, weight: .semibold))
+            HStack(alignment: .center, spacing: 10) {
+                Rectangle()
+                    .fill(Theme.Palette.accent)
+                    .frame(width: 12, height: 1.5)
+
+                Text(title.uppercased())
+                    .font(Theme.Typography.eyebrow())
+                    .tracking(2.4)
                     .foregroundStyle(Theme.Palette.textPrimary)
 
                 Spacer()
@@ -169,16 +174,19 @@ struct ComposerView: View {
                     onClose()
                 } label: {
                     Image(systemName: "xmark")
-                        .font(.system(size: 12, weight: .semibold))
-                        .frame(width: 28, height: 28)
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(Theme.Palette.textTertiary)
+                .buttonStyle(AuroraIconButtonStyle(size: 26))
                 .keyboardShortcut(.cancelAction)
             }
             .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            .background(Theme.Palette.surfaceElevated.opacity(0.8))
+            .padding(.vertical, 13)
+            .background(Theme.Palette.surfaceElevated)
+            .overlay(
+                Rectangle()
+                    .fill(Theme.Palette.borderStrong)
+                    .frame(height: 1),
+                alignment: .bottom
+            )
 
             VStack(spacing: 0) {
                 recipientRow("To", text: $to, focus: .to, showCcBccButton: !isShowingCcBcc)
@@ -206,22 +214,24 @@ struct ComposerView: View {
                 }
 
                 HStack(spacing: 8) {
-                    Text("Subject")
-                        .font(.system(size: 13, weight: .medium))
+                    Text("Subject".uppercased())
+                        .font(Theme.Typography.mono(10, weight: .heavy))
+                        .tracking(1.8)
                         .foregroundStyle(Theme.Palette.textTertiary)
                         .frame(width: 54, alignment: .leading)
 
-                    TextField("Subject", text: $subject)
+                    TextField("Subject line", text: $subject)
                         .textFieldStyle(.plain)
+                        .font(.system(size: 16, weight: .semibold, design: .serif))
                         .focused($focusedField, equals: .subject)
                 }
                 .padding(.horizontal, 16)
-                .padding(.vertical, 12)
+                .padding(.vertical, 13)
 
                 Divider().overlay(Theme.Palette.border)
 
                 TextEditor(text: $messageBody)
-                    .font(.system(size: 14))
+                    .font(.system(size: 14, design: .serif))
                     .scrollContentBackground(.hidden)
                     .foregroundStyle(Theme.Palette.textPrimary)
                     .focused($focusedField, equals: .body)
@@ -245,32 +255,13 @@ struct ComposerView: View {
 
                 Divider().overlay(Theme.Palette.border)
 
-                HStack(spacing: 12) {
-                    Button {
-                        focusedField = .body
-                    } label: {
-                        Image(systemName: "textformat")
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(Theme.Palette.textTertiary)
-
-                    Button {
-                        isShowingFileImporter = true
-                    } label: {
-                        Image(systemName: "paperclip")
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(Theme.Palette.textTertiary)
-                    .accessibilityLabel("Attachments")
-
-                    Button {
+                HStack(spacing: 10) {
+                    ComposerToolButton(systemName: "textformat") { focusedField = .body }
+                    ComposerToolButton(systemName: "paperclip") { isShowingFileImporter = true }
+                    ComposerToolButton(systemName: "clock") {
                         scheduledSendDate = defaultScheduledDate()
                         isShowingSendLaterSheet = true
-                    } label: {
-                        Image(systemName: "clock")
                     }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(Theme.Palette.textTertiary)
                     .disabled(!canSend)
 
                     Spacer()
@@ -280,38 +271,42 @@ struct ComposerView: View {
                     Button {
                         Task { await send() }
                     } label: {
-                        HStack(spacing: 7) {
+                        HStack(spacing: 9) {
                             if isSending {
-                                ProgressView()
-                                    .scaleEffect(0.7)
+                                ProgressView().scaleEffect(0.55).tint(Theme.Palette.background)
                             }
-                            Image(systemName: "paperplane.fill")
                             Text("Send")
+                                .font(.system(size: 13, weight: .semibold, design: .serif))
+                                .tracking(0.5)
+                            Image(systemName: "arrow.right")
+                                .font(.system(size: 11, weight: .heavy))
                         }
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 9)
-                        .background(canSend ? Theme.Palette.accent : Theme.Palette.textTertiary.opacity(0.35))
-                        .clipShape(Capsule())
+                        .foregroundStyle(Theme.Palette.background)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                        .background(
+                            RoundedRectangle(cornerRadius: Theme.Radius.button, style: .continuous)
+                                .fill(canSend ? Theme.Palette.textPrimary : Theme.Palette.textTertiary.opacity(0.45))
+                        )
                     }
                     .buttonStyle(.plain)
                     .disabled(!canSend)
                     .keyboardShortcut(.return, modifiers: [.command])
                 }
-                .padding(.horizontal, 16)
+                .padding(.horizontal, 14)
                 .padding(.vertical, 12)
+                .background(Theme.Palette.surfaceElevated)
             }
         }
-        .frame(minWidth: 320, maxWidth: 520)
+        .frame(minWidth: 320, maxWidth: 540)
         .frame(height: composerHeight)
         .background(Theme.Palette.surface)
-        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.row, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: Theme.Radius.row, style: .continuous)
+            RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
                 .strokeBorder(Theme.Palette.borderStrong, lineWidth: 1)
         )
-        .shadow(color: .black.opacity(0.35), radius: 34, x: 0, y: 18)
+        .shadow(color: .black.opacity(0.20), radius: 32, x: 0, y: 18)
         .fileImporter(
             isPresented: $isShowingFileImporter,
             allowedContentTypes: [.item],
@@ -362,24 +357,27 @@ struct ComposerView: View {
         showCcBccButton: Bool = false
     ) -> some View {
         HStack(spacing: 8) {
-            Text(label)
-                .font(.system(size: 13, weight: .medium))
+            Text(label.uppercased())
+                .font(Theme.Typography.mono(10, weight: .heavy))
+                .tracking(1.8)
                 .foregroundStyle(Theme.Palette.textTertiary)
                 .frame(width: 54, alignment: .leading)
 
             TextField("name@example.com", text: text)
                 .textFieldStyle(.plain)
+                .font(.system(size: 14))
                 .textContentType(.emailAddress)
                 .focused($focusedField, equals: focus)
 
             if showCcBccButton {
-                Button("Cc/Bcc") {
+                Button("Cc/Bcc".uppercased()) {
                     isShowingCcBcc = true
                     focusedField = .cc
                 }
                 .buttonStyle(.plain)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(Theme.Palette.accentSoft)
+                .font(Theme.Typography.mono(10, weight: .heavy))
+                .tracking(1.6)
+                .foregroundStyle(Theme.Palette.accent)
             }
         }
         .padding(.horizontal, 16)
@@ -878,6 +876,26 @@ struct ComposerView: View {
     }
 }
 
+private struct ComposerToolButton: View {
+    let systemName: String
+    let action: () -> Void
+    @Environment(\.isEnabled) private var isEnabled
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(isEnabled ? Theme.Palette.textPrimary : Theme.Palette.textTertiary.opacity(0.5))
+                .frame(width: 30, height: 30)
+                .overlay(
+                    RoundedRectangle(cornerRadius: Theme.Radius.button, style: .continuous)
+                        .strokeBorder(Theme.Palette.border, lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
+    }
+}
+
 private struct RecipientSuggestionList: View {
     let contacts: [EmailContact]
     let onSelect: (EmailContact) -> Void
@@ -889,13 +907,13 @@ private struct RecipientSuggestionList: View {
                     onSelect(contact)
                 } label: {
                     HStack(spacing: 10) {
-                        Circle()
-                            .fill(Theme.Palette.accent.opacity(0.16))
-                            .frame(width: 28, height: 28)
+                        RoundedRectangle(cornerRadius: 4, style: .continuous)
+                            .fill(Theme.Palette.textPrimary)
+                            .frame(width: 26, height: 26)
                             .overlay(
                                 Text(initials(for: contact))
-                                    .font(.system(size: 10, weight: .bold))
-                                    .foregroundStyle(Theme.Palette.accentSoft)
+                                    .font(.system(size: 10, weight: .bold, design: .serif))
+                                    .foregroundStyle(Theme.Palette.background)
                             )
 
                         VStack(alignment: .leading, spacing: 1) {
@@ -906,7 +924,7 @@ private struct RecipientSuggestionList: View {
 
                             if let subtitle = contact.subtitle {
                                 Text(subtitle)
-                                    .font(.system(size: 11))
+                                    .font(Theme.Typography.mono(10))
                                     .foregroundStyle(Theme.Palette.textTertiary)
                                     .lineLimit(1)
                             }
@@ -915,7 +933,7 @@ private struct RecipientSuggestionList: View {
                         Spacer()
 
                         Image(systemName: "return")
-                            .font(.system(size: 11, weight: .semibold))
+                            .font(.system(size: 10, weight: .heavy))
                             .foregroundStyle(Theme.Palette.textTertiary)
                     }
                     .padding(.horizontal, 10)
@@ -926,13 +944,10 @@ private struct RecipientSuggestionList: View {
             }
         }
         .padding(4)
-        .background(
-            RoundedRectangle(cornerRadius: Theme.Radius.button, style: .continuous)
-                .fill(Theme.Palette.surfaceElevated.opacity(0.96))
-        )
+        .background(Theme.Palette.surfaceElevated)
         .overlay(
             RoundedRectangle(cornerRadius: Theme.Radius.button, style: .continuous)
-                .strokeBorder(Theme.Palette.border, lineWidth: 1)
+                .strokeBorder(Theme.Palette.borderStrong, lineWidth: 1)
         )
     }
 
@@ -960,20 +975,25 @@ private struct SendLaterSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            HStack {
-                Text("Send Later")
-                    .font(.system(size: 18, weight: .semibold))
+        VStack(alignment: .leading, spacing: 22) {
+            HStack(alignment: .center, spacing: 10) {
+                Rectangle()
+                    .fill(Theme.Palette.accent)
+                    .frame(width: 14, height: 1.5)
+                Text("Send Later".uppercased())
+                    .font(Theme.Typography.eyebrow(11))
+                    .tracking(2.4)
                     .foregroundStyle(Theme.Palette.textPrimary)
                 Spacer()
-                Button {
-                    dismiss()
-                } label: {
+                Button { dismiss() } label: {
                     Image(systemName: "xmark")
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(Theme.Palette.textTertiary)
+                .buttonStyle(AuroraIconButtonStyle(size: 28))
             }
+
+            Text("Schedule dispatch")
+                .font(.system(size: 26, weight: .bold, design: .serif))
+                .foregroundStyle(Theme.Palette.textPrimary)
 
             DatePicker(
                 "Send at",
@@ -984,7 +1004,7 @@ private struct SendLaterSheet: View {
             .datePickerStyle(.compact)
             .tint(Theme.Palette.accent)
 
-            HStack(spacing: 10) {
+            HStack(spacing: 8) {
                 quickDateButton("In 1 hour", date: Calendar.current.date(byAdding: .hour, value: 1, to: Date()))
                 quickDateButton("Tomorrow 9 AM", date: tomorrowMorning())
             }
@@ -993,45 +1013,38 @@ private struct SendLaterSheet: View {
 
             HStack {
                 Spacer()
-                Button("Cancel") {
-                    dismiss()
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(Theme.Palette.textTertiary)
+                Button("Cancel") { dismiss() }
+                    .buttonStyle(AuroraSecondaryButtonStyle(compact: true))
 
                 Button {
                     onSchedule()
                     dismiss()
                 } label: {
-                    Label("Schedule", systemImage: "clock.badge.checkmark")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 9)
-                        .background(canSchedule ? Theme.Palette.accent : Theme.Palette.textTertiary.opacity(0.35))
-                        .clipShape(Capsule())
+                    Text("Schedule")
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(AuroraPrimaryButtonStyle(compact: true))
                 .disabled(!canSchedule)
             }
         }
-        .padding(18)
-        .background(Theme.Palette.surface)
+        .padding(22)
+        .background(Theme.Palette.background)
     }
 
     private func quickDateButton(_ title: String, date: Date?) -> some View {
-        Button(title) {
+        Button(title.uppercased()) {
             if let date {
                 scheduledDate = date
             }
         }
         .buttonStyle(.plain)
-        .font(.system(size: 12, weight: .semibold))
-        .foregroundStyle(Theme.Palette.accentSoft)
+        .font(Theme.Typography.mono(10, weight: .heavy))
+        .tracking(1.6)
+        .foregroundStyle(Theme.Palette.accent)
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
-        .background(Theme.Palette.accent.opacity(0.12))
-        .clipShape(Capsule())
+        .overlay(
+            Rectangle().strokeBorder(Theme.Palette.accent, lineWidth: 1)
+        )
     }
 
     private func tomorrowMorning() -> Date? {

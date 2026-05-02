@@ -23,6 +23,7 @@ struct MailboxView: View {
     @State private var errorMessage: String?
     @State private var isShowingComposer = false
     @State private var isShowingBlockedSenders = false
+    @State private var isShowingMutedSenders = false
     @State private var isShowingSettings = false
     @State private var isShowingMorningBrief = false
     @State private var draftToEdit: Email?
@@ -46,11 +47,25 @@ struct MailboxView: View {
             ZStack(alignment: .bottom) {
                 Theme.Palette.background.ignoresSafeArea()
 
+                // Faint warm wash at the masthead corner — barely perceptible.
+                Theme.Gradients.ambient
+                    .ignoresSafeArea()
+                    .opacity(0.85)
+
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 22) {
-                        FluxHeader()
-                            .padding(.horizontal, 24)
-                            .padding(.top, 8)
+                    VStack(alignment: .leading, spacing: 0) {
+                        AuroraHeader(
+                            unreadCount: unreadCount,
+                            onOpenSettings: { isShowingSettings = true },
+                            onAddAccount: { Task { await session.signInWithGoogle() } }
+                        )
+                            .pageGutter()
+                            .padding(.top, 14)
+                            .padding(.bottom, 14)
+
+                        Rectangle()
+                            .fill(Theme.Palette.borderStrong)
+                            .frame(height: 1)
 
                         GreetingBlock(
                             name: session.displayName,
@@ -59,7 +74,9 @@ struct MailboxView: View {
                             selectedFolder: selectedFolder,
                             isPriorityMode: isPriorityMode
                         )
-                            .padding(.horizontal, 24)
+                            .pageGutter()
+                            .padding(.top, 26)
+                            .padding(.bottom, 22)
 
                         AccountSearchBar(
                             accounts: accounts,
@@ -79,11 +96,20 @@ struct MailboxView: View {
                             onManageBlockedSenders: {
                                 isShowingBlockedSenders = true
                             },
+                            onManageMutedSenders: {
+                                isShowingMutedSenders = true
+                            },
                             onOpenSettings: {
                                 isShowingSettings = true
                             }
                         )
-                        .padding(.horizontal, 20)
+                        .pageGutter()
+                        .padding(.bottom, 14)
+
+                        Rectangle()
+                            .fill(Theme.Palette.border)
+                            .frame(height: 0.5)
+                            .padding(.bottom, 4)
 
                         EmailListSection(
                             emails: emails,
@@ -127,20 +153,19 @@ struct MailboxView: View {
                                 Task { await loadMoreEmails() }
                             }
                         )
-                        .padding(.horizontal, 20)
+                        .pageGutter()
 
-                        Color.clear.frame(height: 110)
+                        Color.clear.frame(height: 96)
                     }
-                    .padding(.top, 4)
                 }
                 .scrollIndicators(.hidden)
 
                 BottomActionBar(
+                    folderTitle: selectedFolder.title,
+                    unreadCount: unreadCount,
                     onMail: { /* already in mail */ },
                     onCompose: { isShowingComposer = true }
                 )
-                .padding(.horizontal, 28)
-                .padding(.bottom, 12)
             }
             .overlay(alignment: .bottomTrailing) {
                 if isShowingComposer {
@@ -201,6 +226,8 @@ struct MailboxView: View {
                     }
                 } onPrioritySenderChanged: { senderEmail, isImportant in
                     updatePrioritySender(senderEmail: senderEmail, isImportant: isImportant)
+                } onMutedSenderChanged: { senderEmail, isMuted in
+                    updateMutedSender(senderEmail: senderEmail, isMuted: isMuted)
                 }
             }
             .task {
@@ -281,6 +308,9 @@ struct MailboxView: View {
             .sheet(isPresented: $isShowingBlockedSenders) {
                 BlockedSendersView(accountId: selectedAccountId)
             }
+            .sheet(isPresented: $isShowingMutedSenders) {
+                MutedSendersView(accountId: selectedAccountId)
+            }
             .sheet(isPresented: $isShowingSettings) {
                 SettingsView(accounts: accounts) {
                     Task {
@@ -353,6 +383,7 @@ struct MailboxView: View {
                 let watermark = notificationWatermark()
                 let newEmails = fetchedEmails
                     .filter { !knownEmailIds.contains($0.id) }
+                    .filter { $0.isMutedSender != true }
                     .filter { email in
                         guard let watermark else { return false }
                         return email.receivedAt > watermark
@@ -403,6 +434,7 @@ struct MailboxView: View {
             emails.append(contentsOf: page.emails.filter { newEmail in
                 !emails.contains(where: { $0.id == newEmail.id })
             })
+            emails = sortMailboxEmails(emails)
             self.nextPageToken = page.nextPageToken
             knownEmailIds.formUnion(page.emails.map(\.id))
             errorMessage = nil
@@ -464,7 +496,7 @@ struct MailboxView: View {
         if isPriorityMode && !isImportant {
             emails.removeAll { $0.senderEmailAddress.lowercased() == normalizedSender }
         } else if !isPriorityMode {
-            emails.sort { $0.receivedAt > $1.receivedAt }
+            emails = sortMailboxEmails(emails)
         } else {
             emails.sort { left, right in
                 let leftScore = prioritySortScore(left)
@@ -474,6 +506,17 @@ struct MailboxView: View {
                 }
                 return left.receivedAt > right.receivedAt
             }
+        }
+    }
+
+    private func updateMutedSender(senderEmail: String, isMuted: Bool) {
+        let normalizedSender = senderEmail.lowercased()
+        emails = emails.map { email in
+            var updated = email
+            if email.senderEmailAddress.lowercased() == normalizedSender {
+                updated.isMutedSender = isMuted
+            }
+            return updated
         }
     }
 
@@ -579,19 +622,22 @@ struct MailboxView: View {
             for index in emails.indices where ids.contains(emails[index].id) {
                 emails[index].isPinned = true
             }
-            emails = sortPinnedEmails(emails)
+            emails = sortMailboxEmails(emails)
         case .unpin:
             for index in emails.indices where ids.contains(emails[index].id) {
                 emails[index].isPinned = false
             }
-            emails = sortPinnedEmails(emails)
+            emails = sortMailboxEmails(emails)
         }
     }
 
-    private func sortPinnedEmails(_ emails: [Email]) -> [Email] {
+    private func sortMailboxEmails(_ emails: [Email]) -> [Email] {
         emails.sorted {
             if ($0.isPinned == true) != ($1.isPinned == true) {
                 return $0.isPinned == true
+            }
+            if selectedFolder == .inbox && $0.isManualPrioritySender != $1.isManualPrioritySender {
+                return $0.isManualPrioritySender
             }
             return $0.receivedAt > $1.receivedAt
         }
@@ -759,40 +805,45 @@ private struct MorningBriefDetailView: View {
     }
 
     private var header: some View {
-        HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 8) {
+        HStack(alignment: .top, spacing: 14) {
+            ZStack {
+                Circle()
+                    .fill(Theme.Gradients.aurora)
+                    .frame(width: 44, height: 44)
+                    .blur(radius: 14)
+                    .opacity(0.55)
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Theme.Gradients.aurora)
+                    .frame(width: 38, height: 38)
+                    .overlay(
+                        Image(systemName: "sunrise.fill")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(.white)
+                    )
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
                 Text("Morning Brief")
-                    .font(.system(size: 28, weight: .semibold))
+                    .font(.system(size: 26, weight: .semibold))
+                    .kerning(-0.4)
                     .foregroundStyle(Theme.Palette.textPrimary)
 
-                if let brief {
-                    Text(brief.windowText)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(Theme.Palette.textSecondary)
-                } else {
-                    Text("Unread emails from your overnight window")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(Theme.Palette.textSecondary)
-                }
+                Text(brief?.windowText ?? "Unread emails from your overnight window")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Theme.Palette.textTertiary)
             }
 
             Spacer()
 
-            Button {
-                dismiss()
-            } label: {
+            Button { dismiss() } label: {
                 Image(systemName: "xmark")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(Theme.Palette.textSecondary)
-                    .frame(width: 36, height: 36)
-                    .background(Circle().fill(Theme.Palette.surfaceElevated.opacity(0.7)))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(AuroraIconButtonStyle(size: 34))
         }
-        .padding(.horizontal, 28)
-        .padding(.top, 24)
+        .padding(.horizontal, 26)
+        .padding(.top, 22)
         .padding(.bottom, 18)
-        .background(Theme.Palette.surface.opacity(0.72))
+        .background(Theme.Palette.background)
     }
 
     @ViewBuilder
@@ -1034,6 +1085,7 @@ private struct AccountSearchBar: View {
     let onAddAccount: () -> Void
     let onRefreshAccounts: () -> Void
     let onManageBlockedSenders: () -> Void
+    let onManageMutedSenders: () -> Void
     let onOpenSettings: () -> Void
 
     private var selectedAccount: GmailAccount? {
@@ -1042,73 +1094,78 @@ private struct AccountSearchBar: View {
     }
 
     var body: some View {
-        VStack(spacing: 10) {
+        VStack(alignment: .leading, spacing: 14) {
+            // Underline-style folder rail. Text only, hairline divider beneath.
             ScrollView(.horizontal) {
-                HStack(spacing: 8) {
-                    ForEach(MailboxFolder.allCases) { folder in
-                        Button {
-                            selectedFolder = folder
-                        } label: {
-                            HStack(spacing: 6) {
-                                Image(systemName: folder.systemImage)
-                                Text(folder.title)
-                            }
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(selectedFolder == folder ? .white : Theme.Palette.textSecondary)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 9)
-                            .background(
-                                Capsule()
-                                    .fill(selectedFolder == folder ? Theme.Palette.accent : Theme.Palette.surface.opacity(0.65))
-                            )
-                            .overlay(
-                                Capsule()
-                                    .strokeBorder(selectedFolder == folder ? Color.clear : Theme.Palette.border, lineWidth: 1)
-                            )
-                        }
-                        .buttonStyle(.plain)
+                HStack(alignment: .firstTextBaseline, spacing: 22) {
+                    PriorityRailItem(isOn: isPriorityMode) {
+                        withAnimation(Theme.Motion.snappy) { isPriorityMode.toggle() }
                     }
 
-                    Button {
-                        isPriorityMode.toggle()
-                    } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: isPriorityMode ? "bolt.circle.fill" : "bolt.circle")
-                            Text("Priority")
+                    ForEach(MailboxFolder.allCases) { folder in
+                        FolderRailItem(
+                            title: folder.title,
+                            isActive: !isPriorityMode && selectedFolder == folder
+                        ) {
+                            withAnimation(Theme.Motion.snappy) {
+                                if isPriorityMode { isPriorityMode = false }
+                                selectedFolder = folder
+                            }
                         }
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(isPriorityMode ? .white : Theme.Palette.textSecondary)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 9)
-                        .background(
-                            Capsule()
-                                .fill(isPriorityMode ? Theme.Palette.accent : Theme.Palette.surface.opacity(0.65))
-                        )
-                        .overlay(
-                            Capsule()
-                                .strokeBorder(isPriorityMode ? Color.clear : Theme.Palette.border, lineWidth: 1)
-                        )
+                    }
+
+                    Spacer(minLength: 12)
+                }
+                .padding(.bottom, 6)
+            }
+            .scrollIndicators(.hidden)
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(Theme.Palette.border)
+                    .frame(height: 0.5)
+            }
+
+            // Search line + account picker — flat bordered field, no rounded pill.
+            HStack(spacing: 10) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Theme.Palette.textTertiary)
+
+                TextField("Filter \(selectedFolder.title.lowercased())", text: $searchText)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 14))
+                    .foregroundStyle(Theme.Palette.textPrimary)
+
+                if !searchText.isEmpty {
+                    Button {
+                        searchText = ""
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(Theme.Palette.textTertiary)
                     }
                     .buttonStyle(.plain)
                 }
-            }
-            .scrollIndicators(.hidden)
 
-            HStack(spacing: 10) {
+                Rectangle()
+                    .fill(Theme.Palette.border)
+                    .frame(width: 0.5, height: 18)
+                    .padding(.horizontal, 4)
+
                 Menu {
                     Button {
                         selectedAccountId = nil
                     } label: {
-                        Label("All Inboxes", systemImage: selectedAccountId == nil ? "checkmark.circle.fill" : "tray.full")
+                        Label("All Inboxes", systemImage: selectedAccountId == nil ? "checkmark" : "tray")
                     }
 
-                    Divider()
+                    if !accounts.isEmpty { Divider() }
 
                     ForEach(accounts) { account in
                         Button {
                             selectedAccountId = account.id
                         } label: {
-                            Label(account.email, systemImage: selectedAccountId == account.id ? "checkmark.circle.fill" : "circle")
+                            Label(account.email, systemImage: selectedAccountId == account.id ? "checkmark" : "envelope")
                         }
                     }
 
@@ -1117,70 +1174,114 @@ private struct AccountSearchBar: View {
                     Button(action: onAddAccount) {
                         Label("Add Account", systemImage: "plus")
                     }
-
-                    Button(action: onRefreshAccounts) {
-                        Label("Refresh Accounts", systemImage: "arrow.clockwise")
+                } label: {
+                    HStack(spacing: 6) {
+                        Text(accountLabel.uppercased())
+                            .font(Theme.Typography.mono(10, weight: .semibold))
+                            .tracking(1.4)
+                            .foregroundStyle(Theme.Palette.textSecondary)
+                            .lineLimit(1)
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 8, weight: .heavy))
+                            .foregroundStyle(Theme.Palette.textTertiary)
                     }
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+
+                Menu {
+                    Button(action: onRefreshAccounts) {
+                        Label("Refresh Mail", systemImage: "arrow.clockwise")
+                    }
+
+                    Divider()
 
                     Button(action: onManageBlockedSenders) {
                         Label("Blocked Senders", systemImage: "hand.raised")
                     }
-
+                    Button(action: onManageMutedSenders) {
+                        Label("Muted Senders", systemImage: "bell.slash")
+                    }
                     Button(action: onOpenSettings) {
                         Label("Settings", systemImage: "gearshape")
                     }
                 } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: "person.crop.circle")
-                        Text(selectedAccount?.email ?? "All Inboxes")
-                            .lineLimit(1)
-                        Image(systemName: "chevron.down")
-                            .font(.system(size: 11, weight: .semibold))
-                    }
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(Theme.Palette.textPrimary)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
-                    .background(Theme.Palette.surface.opacity(0.65))
-                    .clipShape(Capsule())
-                    .overlay(
-                        Capsule()
-                            .strokeBorder(Theme.Palette.border, lineWidth: 1)
-                    )
+                    Image(systemName: "ellipsis.circle")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(Theme.Palette.textSecondary)
+                        .frame(width: 30, height: 30)
                 }
-                .buttonStyle(.plain)
-
-                Spacer()
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
             }
-
-            HStack(spacing: 10) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(Theme.Palette.textTertiary)
-
-                TextField("Search \(selectedFolder.title.lowercased())", text: $searchText)
-                    .textFieldStyle(.plain)
-                    .foregroundStyle(Theme.Palette.textPrimary)
-
-                if !searchText.isEmpty {
-                    Button {
-                        searchText = ""
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundStyle(Theme.Palette.textTertiary)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .font(.system(size: 15))
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-            .background(Theme.Palette.surface.opacity(0.65))
-            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.button, style: .continuous))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(
+                RoundedRectangle(cornerRadius: Theme.Radius.button, style: .continuous)
+                    .fill(Theme.Palette.surfaceMuted)
+            )
             .overlay(
                 RoundedRectangle(cornerRadius: Theme.Radius.button, style: .continuous)
                     .strokeBorder(Theme.Palette.border, lineWidth: 1)
             )
         }
+    }
+
+    private var accountLabel: String {
+        if let selectedAccount {
+            return selectedAccount.email.split(separator: "@").first.map(String.init) ?? selectedAccount.email
+        }
+        return "All inboxes"
+    }
+}
+
+private struct FolderRailItem: View {
+    let title: String
+    let isActive: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 6) {
+                Text(title.uppercased())
+                    .font(.system(size: 11, weight: isActive ? .black : .semibold))
+                    .tracking(1.8)
+                    .foregroundStyle(isActive ? Theme.Palette.textPrimary : Theme.Palette.textTertiary)
+
+                Rectangle()
+                    .fill(isActive ? Theme.Palette.accent : Color.clear)
+                    .frame(height: 1.5)
+            }
+            .fixedSize()
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct PriorityRailItem: View {
+    let isOn: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 6) {
+                HStack(spacing: 4) {
+                    Image(systemName: "asterisk")
+                        .font(.system(size: 9, weight: .black))
+                    Text("Priority".uppercased())
+                        .font(.system(size: 11, weight: isOn ? .black : .semibold))
+                        .tracking(1.8)
+                }
+                .foregroundStyle(isOn ? Theme.Palette.accent : Theme.Palette.textTertiary)
+
+                Rectangle()
+                    .fill(isOn ? Theme.Palette.accent : Color.clear)
+                    .frame(height: 1.5)
+            }
+            .fixedSize()
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -1196,22 +1297,73 @@ private struct HideNavigationBarModifier: ViewModifier {
     }
 }
 
-// MARK: - Header
+// MARK: - Masthead
 
-private struct FluxHeader: View {
+private struct AuroraHeader: View {
+    let unreadCount: Int
+    let onOpenSettings: () -> Void
+    let onAddAccount: () -> Void
+
+    private var todayLabel: String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "EEE · MMM d · yyyy"
+        return formatter.string(from: .now).uppercased()
+    }
+
+    private var volumeLabel: String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMdd"
+        return "VOL. \(formatter.string(from: .now))"
+    }
+
     var body: some View {
-        HStack {
-            Text("ClarityMail")
-                .font(.system(size: 28, weight: .light, design: .default))
-                .kerning(-0.5)
-                .foregroundStyle(Theme.Palette.textPrimary)
+        HStack(alignment: .center, spacing: 14) {
+            // Editorial wordmark — small ink square + serif name in two lines.
+            HStack(alignment: .center, spacing: 10) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: Theme.Radius.button, style: .continuous)
+                        .fill(Theme.Palette.textPrimary)
+                        .frame(width: 28, height: 28)
+                    Text("CM")
+                        .font(.system(size: 10, weight: .black, design: .serif))
+                        .tracking(0.6)
+                        .foregroundStyle(Theme.Palette.background)
+                }
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("ClarityMail")
+                        .font(.system(size: 15, weight: .bold, design: .serif))
+                        .foregroundStyle(Theme.Palette.textPrimary)
+                    Text(volumeLabel)
+                        .font(Theme.Typography.mono(9, weight: .semibold))
+                        .tracking(1.4)
+                        .foregroundStyle(Theme.Palette.textTertiary)
+                }
+            }
 
             Spacer()
+
+            Text(todayLabel)
+                .font(Theme.Typography.mono(10, weight: .semibold))
+                .tracking(1.6)
+                .foregroundStyle(Theme.Palette.textSecondary)
+
+            HStack(spacing: 8) {
+                Button(action: onAddAccount) {
+                    Image(systemName: "plus")
+                }
+                .buttonStyle(AuroraIconButtonStyle(size: 30))
+
+                Button(action: onOpenSettings) {
+                    Image(systemName: "gearshape")
+                }
+                .buttonStyle(AuroraIconButtonStyle(size: 30))
+            }
         }
     }
 }
 
-// MARK: - Greeting
+// MARK: - Editorial hero
 
 private struct GreetingBlock: View {
     let name: String
@@ -1220,75 +1372,55 @@ private struct GreetingBlock: View {
     let selectedFolder: MailboxFolder
     let isPriorityMode: Bool
 
-    private var greeting: String {
-        let hour = Calendar.current.component(.hour, from: .now)
-        switch hour {
-        case 5..<12: return "Morning"
-        case 12..<17: return "Afternoon"
-        case 17..<22: return "Evening"
-        default: return "Hello"
-        }
-    }
-
-    private var subtitle: String {
-        if isPriorityMode {
-            switch messageCount {
-            case 0: return "No priority emails."
-            case 1: return "1 priority email"
-            default: return "\(messageCount) priority emails"
-            }
-        }
-
-        if selectedFolder != .inbox {
-            return folderSubtitle
-        }
-
-        switch unreadCount {
-        case 0: return "You're all caught up."
-        case 1: return "1 unread message"
-        default: return "\(unreadCount) unread messages"
-        }
-    }
-
-    private var folderSubtitle: String {
+    private var headline: String {
+        if isPriorityMode { return "Priority" }
         switch selectedFolder {
-        case .inbox:
-            return ""
-        case .sent:
-            switch messageCount {
-            case 0: return "No sent messages."
-            case 1: return "1 sent message"
-            default: return "\(messageCount) sent messages"
-            }
-        case .drafts:
-            switch messageCount {
-            case 0: return "No drafts."
-            case 1: return "1 draft"
-            default: return "\(messageCount) drafts"
-            }
-        case .archive:
-            switch messageCount {
-            case 0: return "No archived emails."
-            case 1: return "1 archived email"
-            default: return "\(messageCount) archived emails"
-            }
-        case .trash:
-            switch messageCount {
-            case 0: return "No trashed emails."
-            case 1: return "1 trashed email"
-            default: return "\(messageCount) trashed emails"
-            }
+        case .inbox:   return "Inbox"
+        case .sent:    return "Sent"
+        case .drafts:  return "Drafts"
+        case .archive: return "Archive"
+        case .trash:   return "Trash"
+        }
+    }
+
+    private var byline: String {
+        let metric: String
+        if isPriorityMode {
+            metric = "\(messageCount) priority \(messageCount == 1 ? "thread" : "threads")"
+        } else if selectedFolder == .inbox {
+            metric = unreadCount == 0
+                ? "All caught up"
+                : "\(unreadCount) unread of \(messageCount)"
+        } else {
+            metric = "\(messageCount) \(messageCount == 1 ? "item" : "items")"
+        }
+        return "\(metric) · @\(name.lowercased())"
+    }
+
+    private var sectionLabel: String {
+        if isPriorityMode { return "Section A — flagged" }
+        switch selectedFolder {
+        case .inbox:   return "Section A — incoming"
+        case .sent:    return "Section B — outgoing"
+        case .drafts:  return "Section C — pending"
+        case .archive: return "Section D — filed"
+        case .trash:   return "Section E — discarded"
         }
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("\(greeting), \(name)")
-                .font(.system(size: 30, weight: .semibold))
-                .foregroundStyle(Theme.Palette.textPrimary)
+        VStack(alignment: .leading, spacing: 14) {
+            EyebrowLabel(text: sectionLabel, trailing: nil, accent: Theme.Palette.accent)
 
-            Text(subtitle)
-                .font(.system(size: 15))
+            Text(headline)
+                .font(Theme.Typography.display(58))
+                .foregroundStyle(Theme.Palette.textPrimary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+
+            Text(byline.uppercased())
+                .font(Theme.Typography.mono(11, weight: .semibold))
+                .tracking(1.6)
                 .foregroundStyle(Theme.Palette.textSecondary)
         }
     }
@@ -1377,7 +1509,7 @@ private struct EmailListSection: View {
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 40)
             } else {
-                LazyVStack(spacing: 12) {
+                LazyVStack(spacing: 0) {
                     ForEach(emails) { email in
                         SwipeableEmailRow(
                             isEnabled: !isSelectionMode,
@@ -1564,18 +1696,19 @@ private struct EmailListSection: View {
 private struct BulkActionButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 13, weight: .semibold))
+            .font(.system(size: 12, weight: .semibold))
             .foregroundStyle(Theme.Palette.textPrimary)
-            .padding(.horizontal, 10)
+            .padding(.horizontal, 11)
             .frame(minHeight: 32)
             .background(
-                Capsule()
-                    .fill(Theme.Palette.surface.opacity(configuration.isPressed ? 0.95 : 0.64))
+                Capsule().fill(Theme.Palette.surface)
             )
             .overlay(
-                Capsule()
-                    .strokeBorder(Theme.Palette.border, lineWidth: 1)
+                Capsule().strokeBorder(Theme.Palette.border, lineWidth: 1)
             )
+            .opacity(configuration.isPressed ? 0.78 : 1)
+            .scaleEffect(configuration.isPressed ? 0.97 : 1)
+            .animation(Theme.Motion.snappy, value: configuration.isPressed)
     }
 }
 
@@ -1665,7 +1798,7 @@ private struct SwipeableEmailRow<Content: View>: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Theme.Palette.surface.opacity(0.65))
+        .background(Theme.Palette.surfaceMuted)
     }
 
     private func actionButton(_ swipeAction: RowSwipeAction) -> some View {
@@ -1734,24 +1867,46 @@ private struct SwipeableEmailRow<Content: View>: View {
 
 private struct SearchLoadingView: View {
     var body: some View {
-        VStack(spacing: 12) {
-            ProgressView()
-                .scaleEffect(0.95)
+        VStack(spacing: 14) {
+            ZStack {
+                Circle()
+                    .stroke(Theme.Palette.border, lineWidth: 1)
+                    .frame(width: 44, height: 44)
+                Circle()
+                    .trim(from: 0, to: 0.35)
+                    .stroke(
+                        Theme.Gradients.aurora,
+                        style: StrokeStyle(lineWidth: 2.5, lineCap: .round)
+                    )
+                    .frame(width: 44, height: 44)
+                    .rotationEffect(.degrees(-90))
+                    .modifier(SpinForeverModifier())
+            }
 
             Text("Searching")
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(Theme.Palette.textTertiary)
+                .foregroundStyle(Theme.Palette.textSecondary)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 46)
+        .padding(.vertical, 50)
         .background(
             RoundedRectangle(cornerRadius: Theme.Radius.row, style: .continuous)
-                .fill(Theme.Palette.surface.opacity(0.45))
+                .fill(Theme.Palette.surface)
         )
         .overlay(
             RoundedRectangle(cornerRadius: Theme.Radius.row, style: .continuous)
                 .strokeBorder(Theme.Palette.border, lineWidth: 1)
         )
+    }
+}
+
+private struct SpinForeverModifier: ViewModifier {
+    @State private var spin = false
+    func body(content: Content) -> some View {
+        content
+            .rotationEffect(.degrees(spin ? 360 : 0))
+            .animation(.linear(duration: 1.1).repeatForever(autoreverses: false), value: spin)
+            .onAppear { spin = true }
     }
 }
 
@@ -1762,104 +1917,157 @@ private struct EmailRowView: View {
     var isSelected = false
     var onToggleSelection: () -> Void = {}
 
+    private var isUnread: Bool { !email.isRead }
+
     var body: some View {
-        HStack(alignment: .top, spacing: 14) {
-            if isSelectionMode {
-                Button(action: onToggleSelection) {
-                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                        .font(.system(size: 22, weight: .semibold))
-                        .foregroundStyle(isSelected ? Theme.Palette.accent : Theme.Palette.textTertiary)
-                        .frame(width: 28, height: 38)
+        HStack(alignment: .top, spacing: 12) {
+            // Unread/selection indicator — single saffron dot or bullet.
+            ZStack {
+                if isSelectionMode {
+                    RoundedRectangle(cornerRadius: 2)
+                        .strokeBorder(
+                            isSelected ? Theme.Palette.accent : Theme.Palette.borderStrong,
+                            lineWidth: 1
+                        )
+                        .background(
+                            RoundedRectangle(cornerRadius: 2)
+                                .fill(isSelected ? Theme.Palette.accent : Color.clear)
+                        )
+                        .frame(width: 11, height: 11)
+                        .overlay {
+                            if isSelected {
+                                Image(systemName: "checkmark")
+                                    .font(.system(size: 7, weight: .black))
+                                    .foregroundStyle(.white)
+                            }
+                        }
+                } else if isUnread {
+                    Circle()
+                        .fill(Theme.Palette.accent)
+                        .frame(width: 6, height: 6)
+                } else {
+                    Color.clear.frame(width: 6, height: 6)
                 }
-                .buttonStyle(.plain)
+            }
+            .frame(width: 14, height: 16, alignment: .center)
+            .padding(.top, 14)
+            .onTapGesture {
+                if isSelectionMode { onToggleSelection() }
             }
 
             SenderLogoView(email: email, size: 38)
+                .padding(.top, 2)
 
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(alignment: .firstTextBaseline) {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(email.displayName)
-                        .font(.system(size: 15, weight: email.isRead ? .regular : .semibold))
+                        .font(.system(size: 14, weight: isUnread ? .bold : .regular))
                         .foregroundStyle(Theme.Palette.textPrimary)
+                        .lineLimit(1)
 
-                    Spacer()
-
-                    Text(email.receivedAt.emailRowDateText)
-                        .font(.system(size: 12))
-                        .foregroundStyle(Theme.Palette.textTertiary)
-                        .multilineTextAlignment(.trailing)
-                        .lineLimit(2)
-                }
-
-                Text(email.subject)
-                    .font(.system(size: 14, weight: email.isRead ? .regular : .medium))
-                    .foregroundStyle(Theme.Palette.textPrimary)
-                    .lineLimit(1)
-
-                if email.isPinned == true {
-                    HStack(spacing: 5) {
-                        Image(systemName: "pin.fill")
-                            .font(.system(size: 10, weight: .bold))
-                        Text("Pinned")
+                    if email.isManualPrioritySender {
+                        Text("STAR")
+                            .font(Theme.Typography.mono(8, weight: .heavy))
+                            .tracking(1.2)
+                            .foregroundStyle(Theme.Palette.accent)
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .overlay(
+                                Rectangle().strokeBorder(Theme.Palette.accent, lineWidth: 0.75)
+                            )
                     }
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Theme.Palette.warm)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(Theme.Palette.warm.opacity(0.12))
-                    .clipShape(Capsule())
-                }
-
-                if email.isPriority && showPriorityLabel {
-                    HStack(spacing: 5) {
-                        Image(systemName: email.isManualPrioritySender ? "bolt.fill" : "sparkles")
-                            .font(.system(size: 10, weight: .bold))
-                        Text(email.priorityReason?.isEmpty == false ? email.priorityReason! : "Priority")
-                            .lineLimit(1)
-                    }
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Theme.Palette.accentSoft)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(Theme.Palette.accent.opacity(0.12))
-                    .clipShape(Capsule())
-                }
-
-                HStack(alignment: .top, spacing: 8) {
-                    Text(email.snippet)
-                        .font(.system(size: 13))
-                        .foregroundStyle(Theme.Palette.textSecondary)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.leading)
 
                     Spacer(minLength: 4)
 
-                    if !email.isRead {
-                        Circle()
-                            .fill(Theme.Palette.warm)
-                            .frame(width: 8, height: 8)
-                            .padding(.top, 6)
+                    Text(email.receivedAt.emailRowDateText.replacingOccurrences(of: "\n", with: " · ").uppercased())
+                        .font(Theme.Typography.mono(10, weight: .semibold))
+                        .tracking(1.0)
+                        .foregroundStyle(isUnread ? Theme.Palette.textSecondary : Theme.Palette.textTertiary)
+                        .lineLimit(1)
+                }
+
+                Text(email.subject)
+                    .font(.system(size: 14.5, weight: isUnread ? .semibold : .regular, design: .serif))
+                    .foregroundStyle(Theme.Palette.textPrimary)
+                    .lineLimit(1)
+
+                Text(email.snippet)
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(Theme.Palette.textSecondary)
+                    .lineLimit(1)
+
+                if email.isPinned == true || (email.isPriority && showPriorityLabel) {
+                    HStack(spacing: 8) {
+                        if email.isPinned == true {
+                            EmailRowChip(
+                                title: "Pinned",
+                                systemImage: nil,
+                                color: Theme.Palette.warm
+                            )
+                        }
+                        if email.isPriority && showPriorityLabel {
+                            EmailRowChip(
+                                title: email.priorityReason?.isEmpty == false ? email.priorityReason! : "Priority",
+                                systemImage: nil,
+                                color: Theme.Palette.accent
+                            )
+                        }
                     }
+                    .padding(.top, 2)
                 }
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 14)
+        .padding(.horizontal, 4)
+        .padding(.vertical, 13)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: Theme.Radius.row, style: .continuous)
-                .fill(email.isManualPrioritySender ? Theme.Palette.accent.opacity(0.08) : Theme.Palette.surface.opacity(0.6))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: Theme.Radius.row, style: .continuous)
-                .strokeBorder(
-                    isSelected || email.isManualPrioritySender ? Theme.Palette.accent.opacity(email.isManualPrioritySender ? 0.55 : 0.75) : Theme.Palette.border,
-                    lineWidth: isSelected || email.isManualPrioritySender ? 1.5 : 1
-                )
-        )
+        .background(rowFill)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(Theme.Palette.border)
+                .frame(height: 0.5)
+        }
+        .overlay(alignment: .leading) {
+            if isSelected {
+                Rectangle()
+                    .fill(Theme.Palette.accent)
+                    .frame(width: 2)
+            }
+        }
+        .contentShape(Rectangle())
         .onLongPressGesture {
             onToggleSelection()
         }
+    }
+
+    private var rowFill: Color {
+        if isSelected { return Theme.Palette.accent.opacity(0.06) }
+        if email.isManualPrioritySender { return Theme.Palette.accent.opacity(0.04) }
+        return Color.clear
+    }
+}
+
+private struct EmailRowChip: View {
+    let title: String
+    let systemImage: String?
+    let color: Color
+
+    var body: some View {
+        HStack(spacing: 4) {
+            if let systemImage {
+                Image(systemName: systemImage)
+                    .font(.system(size: 8, weight: .black))
+            }
+            Text(title.uppercased())
+                .lineLimit(1)
+        }
+        .font(Theme.Typography.mono(9, weight: .heavy))
+        .tracking(1.2)
+        .foregroundStyle(color)
+        .padding(.horizontal, 4)
+        .padding(.vertical, 1)
+        .overlay(
+            Rectangle().strokeBorder(color.opacity(0.65), lineWidth: 0.75)
+        )
     }
 }
 
@@ -1877,11 +2085,11 @@ struct SenderLogoView: View {
     private var seedColor: Color {
         let hash = abs(email.displayName.hashValue)
         let palette: [Color] = [
-            Color(red: 0.078, green: 0.580, blue: 0.541), // teal
-            Color(red: 0.180, green: 0.420, blue: 0.580), // ocean
-            Color(red: 0.290, green: 0.341, blue: 0.541), // indigo
-            Color(red: 0.400, green: 0.620, blue: 0.580), // sage
-            Color(red: 0.180, green: 0.224, blue: 0.443)  // deep blue
+            Color(red: 0.180, green: 0.369, blue: 0.310),  // pine
+            Color(red: 0.545, green: 0.122, blue: 0.059),  // oxblood
+            Color(red: 0.078, green: 0.067, blue: 0.059),  // ink
+            Color(red: 0.420, green: 0.349, blue: 0.227),  // umber
+            Color(red: 0.292, green: 0.220, blue: 0.180)   // walnut
         ]
         return palette[hash % palette.count]
     }
@@ -1897,10 +2105,10 @@ struct SenderLogoView: View {
             }
         }
         .frame(width: size, height: size)
-        .clipShape(Circle())
+        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
         .overlay(
-            Circle()
-                .strokeBorder(Theme.Palette.border, lineWidth: 1)
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .strokeBorder(Theme.Palette.border, lineWidth: 0.75)
         )
         .task(id: email.senderEmailAddress) {
             await loadLogoIfNeeded()
@@ -1908,18 +2116,12 @@ struct SenderLogoView: View {
     }
 
     private var fallback: some View {
-        Circle()
-            .fill(
-                LinearGradient(
-                    colors: [seedColor.opacity(0.95), seedColor.opacity(0.65)],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-            )
+        RoundedRectangle(cornerRadius: 4, style: .continuous)
+            .fill(seedColor)
             .overlay(
                 Text(initials)
-                    .font(.system(size: max(11, size * 0.34), weight: .semibold))
-                    .foregroundStyle(.white)
+                    .font(.system(size: max(11, size * 0.36), weight: .bold, design: .serif))
+                    .foregroundStyle(Theme.Palette.background)
             )
     }
 
@@ -1971,46 +2173,52 @@ private extension Image {
 }
 #endif
 
-// MARK: - Bottom Action Bar
+// MARK: - Bottom Action Bar (editorial footer)
 
 private struct BottomActionBar: View {
+    let folderTitle: String
+    let unreadCount: Int
     let onMail: () -> Void
     let onCompose: () -> Void
 
     var body: some View {
-        HStack(spacing: 8) {
-            BarIconButton(systemName: "envelope.fill", isActive: true, action: onMail)
-            Spacer()
-            ComposeButton(action: onCompose)
-        }
-        .padding(.leading, 18)
-        .padding(.trailing, 8)
-        .padding(.vertical, 8)
-        .background(
-            Capsule(style: .continuous)
-                .fill(Theme.Palette.surface.opacity(0.92))
-                .overlay(
-                    Capsule(style: .continuous)
-                        .strokeBorder(Theme.Palette.border, lineWidth: 1)
-                )
-                .shadow(color: .black.opacity(0.18), radius: 24, x: 0, y: 10)
-        )
-    }
-}
+        VStack(spacing: 0) {
+            Rectangle()
+                .fill(Theme.Palette.borderStrong)
+                .frame(height: 1)
 
-private struct BarIconButton: View {
-    let systemName: String
-    var isActive: Bool = false
-    let action: () -> Void
+            HStack(alignment: .center, spacing: 14) {
+                Button(action: onMail) {
+                    HStack(spacing: 8) {
+                        Rectangle()
+                            .fill(Theme.Palette.accent)
+                            .frame(width: 14, height: 1.5)
+                        Text(folderTitle.uppercased())
+                            .font(Theme.Typography.mono(11, weight: .heavy))
+                            .tracking(2.0)
+                            .foregroundStyle(Theme.Palette.textPrimary)
+                    }
+                }
+                .buttonStyle(.plain)
 
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: systemName)
-                .font(.system(size: 19, weight: .regular))
-                .foregroundStyle(isActive ? Theme.Palette.accent : Theme.Palette.textSecondary)
-                .frame(width: 44, height: 44)
+                if unreadCount > 0 {
+                    Text("·")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(Theme.Palette.textTertiary)
+                    Text("\(unreadCount) UNREAD")
+                        .font(Theme.Typography.mono(10, weight: .semibold))
+                        .tracking(1.6)
+                        .foregroundStyle(Theme.Palette.textTertiary)
+                }
+
+                Spacer()
+
+                ComposeButton(action: onCompose)
+            }
+            .padding(.horizontal, Theme.Layout.gutter)
+            .padding(.vertical, 12)
+            .background(Theme.Palette.background.opacity(0.97))
         }
-        .buttonStyle(.plain)
     }
 }
 
@@ -2019,17 +2227,20 @@ private struct ComposeButton: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 8) {
-                Image(systemName: "square.and.pencil")
-                    .font(.system(size: 15, weight: .semibold))
+            HStack(spacing: 10) {
                 Text("Compose")
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.system(size: 13, weight: .semibold, design: .serif))
+                    .tracking(0.5)
+                Image(systemName: "arrow.right")
+                    .font(.system(size: 11, weight: .heavy))
             }
-            .foregroundStyle(.white)
+            .foregroundStyle(Theme.Palette.background)
             .padding(.horizontal, 18)
-            .padding(.vertical, 12)
-            .background(Theme.Gradients.primary)
-            .clipShape(Capsule())
+            .padding(.vertical, 11)
+            .background(
+                RoundedRectangle(cornerRadius: Theme.Radius.button, style: .continuous)
+                    .fill(Theme.Palette.textPrimary)
+            )
         }
         .buttonStyle(.plain)
         .keyboardShortcut("n", modifiers: [.command])

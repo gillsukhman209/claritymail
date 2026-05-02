@@ -1,9 +1,9 @@
 import SwiftUI
 
-struct BlockedSendersView: View {
+struct MutedSendersView: View {
     let accountId: String?
     @Environment(\.dismiss) private var dismiss
-    @State private var blockedSenders: [BlockedSender] = []
+    @State private var mutedSenders: [MutedSender] = []
     @State private var isLoading = false
     @State private var errorMessage: String?
 
@@ -23,12 +23,12 @@ struct BlockedSendersView: View {
                                 .font(Theme.Typography.mono(11, weight: .semibold))
                                 .tracking(1.2)
                         }
-                        .foregroundStyle(Theme.Palette.danger)
+                        .foregroundStyle(Theme.Palette.warm)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 9)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .overlay(
-                            Rectangle().strokeBorder(Theme.Palette.danger.opacity(0.4), lineWidth: 1)
+                            Rectangle().strokeBorder(Theme.Palette.warm.opacity(0.4), lineWidth: 1)
                         )
                         .padding(.bottom, 14)
                     }
@@ -36,19 +36,19 @@ struct BlockedSendersView: View {
                     if isLoading {
                         ProgressView()
                             .frame(maxWidth: .infinity, minHeight: 200)
-                    } else if blockedSenders.isEmpty {
+                    } else if mutedSenders.isEmpty {
                         emptyState
                     } else {
                         VStack(spacing: 0) {
                             EyebrowLabel(
-                                text: "Banned · \(blockedSenders.count) sender\(blockedSenders.count == 1 ? "" : "s")",
-                                accent: Theme.Palette.danger
+                                text: "Muted · \(mutedSenders.count) sender\(mutedSenders.count == 1 ? "" : "s")",
+                                accent: Theme.Palette.warm
                             )
                             .padding(.bottom, 12)
 
-                            ForEach(blockedSenders) { sender in
-                                BlockedSenderRow(sender: sender) {
-                                    Task { await unblock(sender) }
+                            ForEach(mutedSenders) { sender in
+                                MutedSenderRow(sender: sender) {
+                                    Task { await unmute(sender) }
                                 }
                             }
                         }
@@ -66,7 +66,7 @@ struct BlockedSendersView: View {
                 .strokeBorder(Theme.Palette.borderStrong, lineWidth: 1)
         )
         .shadow(color: .black.opacity(0.20), radius: 36, x: 0, y: 18)
-        .task { await loadBlockedSenders() }
+        .task { await loadMutedSenders() }
     }
 
     private var header: some View {
@@ -75,7 +75,7 @@ struct BlockedSendersView: View {
                 Rectangle()
                     .fill(Theme.Palette.accent)
                     .frame(width: 14, height: 1.5)
-                Text("Editorial".uppercased())
+                Text("Notifications".uppercased())
                     .font(Theme.Typography.eyebrow(11))
                     .tracking(2.4)
                     .foregroundStyle(Theme.Palette.textPrimary)
@@ -87,11 +87,11 @@ struct BlockedSendersView: View {
                     .keyboardShortcut(.cancelAction)
             }
 
-            Text("Blocked Senders")
+            Text("Muted Senders")
                 .font(.system(size: 28, weight: .bold, design: .serif))
                 .foregroundStyle(Theme.Palette.textPrimary)
 
-            Text("Unblock anyone to let their dispatches through.".uppercased())
+            Text("Emails still arrive. Notifications stay quiet.".uppercased())
                 .font(Theme.Typography.mono(10, weight: .semibold))
                 .tracking(1.4)
                 .foregroundStyle(Theme.Palette.textTertiary)
@@ -112,16 +112,16 @@ struct BlockedSendersView: View {
                 RoundedRectangle(cornerRadius: 4, style: .continuous)
                     .fill(Theme.Palette.textPrimary)
                     .frame(width: 44, height: 44)
-                Image(systemName: "checkmark")
+                Image(systemName: "bell")
                     .font(.system(size: 18, weight: .heavy, design: .serif))
                     .foregroundStyle(Theme.Palette.background)
             }
 
-            Text("No Blocked Senders")
+            Text("No Muted Senders")
                 .font(.system(size: 22, weight: .bold, design: .serif))
                 .foregroundStyle(Theme.Palette.textPrimary)
 
-            Text("Anyone you block will appear here.".uppercased())
+            Text("Muted senders will appear here.".uppercased())
                 .font(Theme.Typography.mono(10, weight: .semibold))
                 .tracking(1.4)
                 .foregroundStyle(Theme.Palette.textTertiary)
@@ -130,51 +130,51 @@ struct BlockedSendersView: View {
         .padding(.vertical, 60)
     }
 
-    private func loadBlockedSenders() async {
+    private func loadMutedSenders() async {
         isLoading = true
         defer { isLoading = false }
 
         do {
-            blockedSenders = try await apiClient.blockedSenders(accountId: accountId)
+            mutedSenders = try await apiClient.mutedSenders(accountId: accountId)
             errorMessage = nil
         } catch {
-            errorMessage = "Could not load blocked senders."
+            errorMessage = "Could not load muted senders."
         }
     }
 
-    private func unblock(_ sender: BlockedSender) async {
+    private func unmute(_ sender: MutedSender) async {
         do {
-            try await apiClient.unblockSender(accountId: sender.accountId, senderEmail: sender.senderEmail)
-            blockedSenders.removeAll { $0.id == sender.id }
+            try await apiClient.unmuteSender(accountId: sender.accountId, senderEmail: sender.senderEmail)
+            mutedSenders.removeAll { $0.id == sender.id }
             errorMessage = nil
         } catch {
-            errorMessage = "Could not unblock sender."
+            errorMessage = "Could not unmute sender."
         }
     }
 }
 
-private struct BlockedSenderRow: View {
-    let sender: BlockedSender
-    let onUnblock: () -> Void
+private struct MutedSenderRow: View {
+    let sender: MutedSender
+    let onUnmute: () -> Void
 
     var body: some View {
         HStack(spacing: 14) {
-            Text("BLOCKED")
+            Text("MUTED")
                 .font(Theme.Typography.mono(9, weight: .heavy))
                 .tracking(1.4)
-                .foregroundStyle(Theme.Palette.danger)
+                .foregroundStyle(Theme.Palette.warm)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 3)
                 .overlay(
-                    Rectangle().strokeBorder(Theme.Palette.danger, lineWidth: 1)
+                    Rectangle().strokeBorder(Theme.Palette.warm, lineWidth: 1)
                 )
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(sender.senderEmail)
+                Text(sender.senderName.isEmpty ? sender.senderEmail : sender.senderName)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(Theme.Palette.textPrimary)
                     .lineLimit(1)
-                Text(sender.accountEmail.uppercased())
+                Text(sender.senderEmail)
                     .font(Theme.Typography.mono(9, weight: .semibold))
                     .tracking(1.2)
                     .foregroundStyle(Theme.Palette.textTertiary)
@@ -183,7 +183,7 @@ private struct BlockedSenderRow: View {
 
             Spacer()
 
-            Button("Unblock", action: onUnblock)
+            Button("Unmute", action: onUnmute)
                 .buttonStyle(AuroraSecondaryButtonStyle(compact: true))
         }
         .padding(.vertical, 11)

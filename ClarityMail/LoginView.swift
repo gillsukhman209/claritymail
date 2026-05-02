@@ -2,7 +2,7 @@
 //  LoginView.swift
 //  ClarityMail
 //
-//  Created by Sukhman Singh on 4/29/26.
+//  Editorial sign-in cover.
 //
 
 import SwiftUI
@@ -11,96 +11,191 @@ struct LoginView: View {
     @ObservedObject var session: SessionStore
     @Environment(\.openURL) private var openURL
 
+    private var todayLabel: String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "EEEE · MMMM d · yyyy"
+        return formatter.string(from: .now).uppercased()
+    }
+
     var body: some View {
         ZStack {
             Theme.Palette.background.ignoresSafeArea()
 
-            VStack(spacing: 28) {
-                Spacer()
+            // Whispered warm wash anchored to the top corner.
+            Theme.Gradients.ambient
+                .ignoresSafeArea()
+                .opacity(0.9)
 
-                VStack(spacing: 14) {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 22, style: .continuous)
-                            .fill(Theme.Gradients.primary)
-                            .frame(width: 84, height: 84)
+            VStack(alignment: .leading, spacing: 0) {
+                masthead
+                    .padding(.horizontal, 32)
+                    .padding(.top, 32)
+                    .padding(.bottom, 18)
 
-                        Image(systemName: "envelope.fill")
-                            .font(.system(size: 32, weight: .regular))
-                            .foregroundStyle(.white)
-                    }
+                Rectangle()
+                    .fill(Theme.Palette.borderStrong)
+                    .frame(height: 1)
 
-                    Text("ClarityMail")
-                        .font(.system(size: 36, weight: .light))
-                        .kerning(-0.5)
-                        .foregroundStyle(Theme.Palette.textPrimary)
+                Spacer(minLength: 0)
 
-                    Text("Your inbox, focused.")
-                        .font(.system(size: 15))
-                        .foregroundStyle(Theme.Palette.textSecondary)
-                }
+                hero
+                    .padding(.horizontal, 32)
 
-                Spacer()
+                Spacer(minLength: 0)
 
-                VStack(spacing: 12) {
-                    Button {
-                        Task { await session.signInWithGoogle() }
-                    } label: {
-                        HStack(spacing: 10) {
-                            Image(systemName: "person.crop.circle.badge.checkmark")
-                                .font(.system(size: 16, weight: .semibold))
-                            Text("Sign in with Google")
-                                .font(.system(size: 15, weight: .semibold))
-                        }
-                        .foregroundStyle(.white)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 16)
-                        .background(Theme.Gradients.primary)
-                        .clipShape(Capsule())
-                    }
-                    .buttonStyle(.plain)
-
-                    Button {
-                        Task { await session.refreshAuthStatus() }
-                    } label: {
-                        Text("I finished signing in")
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundStyle(Theme.Palette.textSecondary)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 14)
-                            .overlay(
-                                Capsule()
-                                    .strokeBorder(Theme.Palette.border, lineWidth: 1)
-                            )
-                    }
-                    .buttonStyle(.plain)
-
-                    Button {
-                        session.usePreviewSession()
-                    } label: {
-                        Text("Use Preview Inbox")
-                            .font(.system(size: 14))
-                            .foregroundStyle(Theme.Palette.textTertiary)
-                            .padding(.vertical, 8)
-                    }
-                    .buttonStyle(.plain)
-                }
-                .padding(.horizontal, 28)
+                actions
+                    .padding(.horizontal, 32)
+                    .padding(.bottom, 12)
 
                 if let errorMessage = session.errorMessage {
-                    Text(errorMessage)
-                        .font(.system(size: 13))
-                        .foregroundStyle(Theme.Palette.warm)
-                        .multilineTextAlignment(.center)
-                        .frame(maxWidth: 320)
-                        .padding(.horizontal, 24)
+                    HStack(spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 11, weight: .heavy))
+                        Text(errorMessage.uppercased())
+                            .font(Theme.Typography.mono(11, weight: .semibold))
+                            .tracking(1.2)
+                            .multilineTextAlignment(.leading)
+                    }
+                    .foregroundStyle(Theme.Palette.danger)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 32)
+                    .padding(.bottom, 14)
+                    .transition(.opacity)
                 }
 
-                Spacer()
+                Rectangle()
+                    .fill(Theme.Palette.border)
+                    .frame(height: 0.5)
+
+                footer
+                    .padding(.horizontal, 32)
+                    .padding(.vertical, 14)
             }
+            .frame(maxWidth: 720, maxHeight: .infinity, alignment: .leading)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .onChange(of: session.pendingAuthURL) {
             guard let url = session.pendingAuthURL else { return }
             openURL(url)
         }
+    }
+
+    private var masthead: some View {
+        HStack(alignment: .center, spacing: 14) {
+            ZStack {
+                RoundedRectangle(cornerRadius: Theme.Radius.button, style: .continuous)
+                    .fill(Theme.Palette.textPrimary)
+                    .frame(width: 32, height: 32)
+                Text("CM")
+                    .font(.system(size: 11, weight: .black, design: .serif))
+                    .tracking(0.6)
+                    .foregroundStyle(Theme.Palette.background)
+            }
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text("ClarityMail")
+                    .font(.system(size: 16, weight: .bold, design: .serif))
+                    .foregroundStyle(Theme.Palette.textPrimary)
+                Text("Edition · The Daily Inbox".uppercased())
+                    .font(Theme.Typography.mono(9, weight: .semibold))
+                    .tracking(1.6)
+                    .foregroundStyle(Theme.Palette.textTertiary)
+            }
+
+            Spacer()
+
+            Text(todayLabel)
+                .font(Theme.Typography.mono(10, weight: .semibold))
+                .tracking(1.6)
+                .foregroundStyle(Theme.Palette.textSecondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+        }
+    }
+
+    private var hero: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            EyebrowLabel(text: "Volume 1 — Issue 01", accent: Theme.Palette.accent)
+
+            Text("An inbox\nthat reads itself.")
+                .font(.system(size: 64, weight: .bold, design: .serif).italic())
+                .foregroundStyle(Theme.Palette.textPrimary)
+                .lineSpacing(-4)
+                .minimumScaleFactor(0.6)
+                .lineLimit(3)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Text("Connect a Gmail account and ClarityMail begins composing daily briefs, surfacing what matters, and dispatching the rest. No effort, no noise.")
+                .font(.system(size: 15, design: .serif))
+                .foregroundStyle(Theme.Palette.textSecondary)
+                .lineSpacing(4)
+                .frame(maxWidth: 540, alignment: .leading)
+        }
+    }
+
+    private var actions: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Rectangle()
+                .fill(Theme.Palette.border)
+                .frame(height: 0.5)
+                .padding(.bottom, 14)
+
+            HStack(alignment: .center, spacing: 14) {
+                Button {
+                    Task { await session.signInWithGoogle() }
+                } label: {
+                    HStack(spacing: 9) {
+                        Text("Continue with Google")
+                        Image(systemName: "arrow.right")
+                            .font(.system(size: 11, weight: .heavy))
+                    }
+                }
+                .buttonStyle(AuroraPrimaryButtonStyle())
+
+                Button {
+                    Task { await session.refreshAuthStatus() }
+                } label: {
+                    Text("I've finished signing in")
+                }
+                .buttonStyle(AuroraSecondaryButtonStyle())
+
+                Spacer()
+
+                Button {
+                    session.usePreviewSession()
+                } label: {
+                    Text("Preview inbox →".uppercased())
+                        .font(Theme.Typography.mono(10, weight: .heavy))
+                        .tracking(1.6)
+                        .foregroundStyle(Theme.Palette.textTertiary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private var footer: some View {
+        HStack(spacing: 18) {
+            HStack(spacing: 6) {
+                Image(systemName: "lock.shield")
+                    .font(.system(size: 10, weight: .heavy))
+                Text("ENCRYPTED IN TRANSIT")
+                    .tracking(1.6)
+            }
+
+            Rectangle()
+                .fill(Theme.Palette.border)
+                .frame(width: 0.5, height: 12)
+
+            Text("PRIVATE BY DEFAULT")
+                .tracking(1.6)
+
+            Spacer()
+
+            Text("© CLARITYMAIL")
+                .tracking(1.6)
+        }
+        .font(Theme.Typography.mono(9, weight: .semibold))
+        .foregroundStyle(Theme.Palette.textTertiary)
     }
 }

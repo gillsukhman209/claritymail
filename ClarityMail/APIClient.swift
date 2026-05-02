@@ -40,6 +40,14 @@ struct APIClient {
         return response.importantSenders
     }
 
+    func mutedSenders(accountId: String? = nil) async throws -> [MutedSender] {
+        let response: MutedSendersResponse = try await get(
+            "/muted-senders",
+            queryItems: accountQueryItems(accountId: accountId)
+        )
+        return response.mutedSenders
+    }
+
     func markSenderImportant(id: Email.ID, accountId: String? = nil) async throws -> String {
         let response: ImportantSenderActionResponse = try await postForResponse(
             "/emails/\(id)/important-sender",
@@ -48,9 +56,27 @@ struct APIClient {
         return response.senderEmail
     }
 
+    func muteSender(id: Email.ID, accountId: String? = nil) async throws -> String {
+        let response: MutedSenderActionResponse = try await postForResponse(
+            "/emails/\(id)/mute-sender",
+            queryItems: accountQueryItems(accountId: accountId)
+        )
+        return response.senderEmail
+    }
+
     func removeImportantSender(accountId: String, senderEmail: String) async throws {
         try await delete(
             "/important-senders",
+            queryItems: [
+                URLQueryItem(name: "accountId", value: accountId),
+                URLQueryItem(name: "senderEmail", value: senderEmail)
+            ]
+        )
+    }
+
+    func unmuteSender(accountId: String, senderEmail: String) async throws {
+        try await delete(
+            "/muted-senders",
             queryItems: [
                 URLQueryItem(name: "accountId", value: accountId),
                 URLQueryItem(name: "senderEmail", value: senderEmail)
@@ -652,6 +678,14 @@ private struct ImportantSenderActionResponse: Decodable {
     let senderEmail: String
 }
 
+private struct MutedSendersResponse: Decodable {
+    let mutedSenders: [MutedSender]
+}
+
+private struct MutedSenderActionResponse: Decodable {
+    let senderEmail: String
+}
+
 private struct AccountsResponse: Decodable {
     let accounts: [GmailAccount]
 }
@@ -685,6 +719,14 @@ struct BlockedSender: Identifiable, Hashable, Decodable {
 }
 
 struct ImportantSender: Identifiable, Hashable, Decodable {
+    let id: String
+    let accountId: String
+    let accountEmail: String
+    let senderEmail: String
+    let senderName: String
+}
+
+struct MutedSender: Identifiable, Hashable, Decodable {
     let id: String
     let accountId: String
     let accountEmail: String

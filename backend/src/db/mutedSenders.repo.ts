@@ -9,6 +9,10 @@ function mutedSenderDocId(accountId: string, senderEmail: string) {
     .digest("hex");
 }
 
+function mutedSenderSuppressionDocId(accountId: string, senderEmail: string) {
+  return mutedSenderDocId(accountId, senderEmail);
+}
+
 export type MutedSenderRecord = {
   id: string;
   accountId: string;
@@ -75,7 +79,39 @@ export async function deleteMutedSender(input: { accountId: string; senderEmail:
   const senderEmail = normalizeEmailAddress(input.senderEmail);
   const db = getFirestore();
   await db.collection("mutedSenders").doc(mutedSenderDocId(input.accountId, senderEmail)).delete();
+  await db.collection("mutedSenderNotificationSuppressions").doc(mutedSenderSuppressionDocId(input.accountId, senderEmail)).set(
+    {
+      accountId: input.accountId,
+      senderEmail,
+      suppressBefore: new Date(),
+      updatedAt: new Date()
+    },
+    { merge: true }
+  );
   return senderEmail;
+}
+
+export async function listMutedSenderNotificationSuppressions(accountId: string) {
+  const db = getFirestore();
+  const snapshot = await db
+    .collection("mutedSenderNotificationSuppressions")
+    .where("accountId", "==", accountId)
+    .get();
+
+  const suppressions = new Map<string, Date>();
+  snapshot.docs.forEach((doc) => {
+    const data = doc.data();
+    const senderEmail = normalizeEmailAddress(String(data.senderEmail ?? ""));
+    const rawDate = data.suppressBefore as { toDate?: () => Date } | Date | string | undefined;
+    const suppressBefore =
+      typeof rawDate === "string" ? new Date(rawDate) : rawDate instanceof Date ? rawDate : rawDate?.toDate?.();
+
+    if (senderEmail && suppressBefore && !Number.isNaN(suppressBefore.getTime())) {
+      suppressions.set(senderEmail, suppressBefore);
+    }
+  });
+
+  return suppressions;
 }
 
 export function applyMutedSenderState<T extends { sender: string }>(emails: T[], mutedSenders: Set<string>) {
@@ -91,4 +127,22 @@ export function filterMutedEmails<T extends { sender: string }>(emails: T[], mut
   }
 
   return emails.filter((email) => !mutedSenders.has(normalizeEmailAddress(email.sender)));
+}
+
+export function filterMutedSuppressedEmails<T extends { sender: string; receivedAt: string }>(
+  emails: T[],
+  suppressions: Map<string, Date>
+) {
+  if (suppressions.size === 0) {
+    return emails;
+  }
+
+  return emails.filter((email) => {
+    const suppressBefore = suppressions.get(normalizeEmailAddress(email.sender));
+    if (!suppressBefore) {
+      return true;
+    }
+
+    return Date.parse(email.receivedAt) > suppressBefore.getTime();
+  });
 }

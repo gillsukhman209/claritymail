@@ -92,29 +92,39 @@ struct UndoSendToast: View {
 
     var body: some View {
         if let pendingSend = manager.pendingSend {
-            HStack(spacing: 12) {
-                Text("\(pendingSend.title) in \(pendingSend.secondsRemaining)s")
-                    .font(.system(size: 13, weight: .semibold))
+            HStack(spacing: 14) {
+                Text("\(pendingSend.secondsRemaining)")
+                    .font(Theme.Typography.mono(13, weight: .heavy))
+                    .foregroundStyle(Theme.Palette.accent)
+                    .frame(width: 28, height: 28)
+                    .overlay(
+                        Rectangle().strokeBorder(Theme.Palette.accent, lineWidth: 1)
+                    )
+
+                Text("\(pendingSend.title.uppercased())")
+                    .font(Theme.Typography.mono(11, weight: .heavy))
+                    .tracking(1.6)
                     .foregroundStyle(Theme.Palette.textPrimary)
 
-                Button("Undo") {
+                Button("Undo".uppercased()) {
                     manager.undo()
                 }
                 .buttonStyle(.plain)
-                .font(.system(size: 13, weight: .bold))
-                .foregroundStyle(Theme.Palette.accentSoft)
+                .font(Theme.Typography.mono(11, weight: .heavy))
+                .tracking(1.6)
+                .foregroundStyle(Theme.Palette.background)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
+                .background(Theme.Palette.textPrimary)
             }
             .padding(.horizontal, 14)
-            .padding(.vertical, 11)
-            .background(
-                Capsule(style: .continuous)
-                    .fill(Theme.Palette.surfaceElevated.opacity(0.96))
-            )
+            .padding(.vertical, 9)
+            .background(Theme.Palette.surfaceElevated)
             .overlay(
-                Capsule(style: .continuous)
+                Rectangle()
                     .strokeBorder(Theme.Palette.borderStrong, lineWidth: 1)
             )
-            .shadow(color: .black.opacity(0.28), radius: 18, x: 0, y: 8)
+            .shadow(color: .black.opacity(0.20), radius: 22, x: 0, y: 10)
             .transition(.move(edge: .bottom).combined(with: .opacity))
         }
     }
