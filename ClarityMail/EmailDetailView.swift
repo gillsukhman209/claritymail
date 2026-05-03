@@ -292,19 +292,13 @@ struct EmailDetailView: View {
 
     private var headerSection: some View {
         VStack(alignment: .leading, spacing: 14) {
-            EyebrowLabel(
-                text: "Dispatch",
-                trailing: visibleEmail.receivedAt.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day().hour().minute()),
-                accent: Theme.Palette.accent
-            )
-
             Text(visibleEmail.subject)
                 .font(.system(size: 30, weight: .bold, design: .serif))
                 .foregroundStyle(Theme.Palette.textPrimary)
                 .lineSpacing(2)
                 .textSelection(.enabled)
 
-            HStack(spacing: 12) {
+            HStack(alignment: .center, spacing: 12) {
                 SenderLogoView(email: visibleEmail, size: 36)
 
                 VStack(alignment: .leading, spacing: 1) {
@@ -319,6 +313,12 @@ struct EmailDetailView: View {
                 }
 
                 Spacer()
+
+                Text(visibleEmail.receivedAt.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day().hour().minute()).uppercased())
+                    .font(Theme.Typography.mono(10, weight: .semibold))
+                    .tracking(1.4)
+                    .foregroundStyle(Theme.Palette.textTertiary)
+                    .lineLimit(1)
             }
             .padding(.top, 4)
         }
@@ -390,11 +390,6 @@ struct EmailDetailView: View {
 
                 if isLoadingSummary {
                     ProgressView().scaleEffect(0.6)
-                } else {
-                    Text("AI · GPT")
-                        .font(Theme.Typography.mono(9, weight: .semibold))
-                        .tracking(1.4)
-                        .foregroundStyle(Theme.Palette.textTertiary)
                 }
             }
 

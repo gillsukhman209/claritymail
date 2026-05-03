@@ -5,6 +5,12 @@
 
 import SwiftUI
 import WebKit
+#if canImport(AppKit)
+import AppKit
+#endif
+#if canImport(UIKit)
+import UIKit
+#endif
 
 struct EmailHTMLView: View {
     let html: String?
@@ -33,9 +39,7 @@ struct EmailHTMLView: View {
 
     /// Wraps the email's HTML in a fixed-light render context so any color CSS
     /// the sender shipped (white-on-dark dark-mode tweaks, transparent text,
-    /// etc.) lands on a predictable canvas. This is the same pattern Apple Mail
-    /// and Gmail use: the email body is always rendered against white, with a
-    /// dark default text color, regardless of system appearance.
+    /// etc.) lands on a predictable canvas.
     private func wrappedHTML(_ body: String) -> String {
         """
         <!doctype html>
@@ -61,16 +65,9 @@ struct EmailHTMLView: View {
               overflow-wrap: anywhere;
               -webkit-text-size-adjust: 100%;
             }
-            /* Defeat dark-mode email tweaks. Many marketing templates ship a
-               @media (prefers-color-scheme: dark) block that flips text white;
-               since we forced color-scheme: light, those rules won't activate.
-               We still guard against bare `color: #fff` etc. by giving any
-               element with no color a sensible default. */
             *:not([style*="color"]):not(font[color]) {
               color: inherit;
             }
-            /* Some senders set body color: #fff inline. Force readable defaults
-               on bare paragraphs / spans / divs that inherit nothing useful. */
             p, div, span, td, th, li, h1, h2, h3, h4, h5, h6 {
               color: inherit;
             }
@@ -118,6 +115,18 @@ struct EmailHTMLView: View {
     }
 }
 
+// MARK: - URL handling
+
+/// Sends a URL through the system's default opener. Handles http(s), mailto,
+/// tel, and any custom scheme the OS knows about.
+private func openExternal(_ url: URL) {
+    #if canImport(AppKit)
+    NSWorkspace.shared.open(url)
+    #elseif canImport(UIKit)
+    UIApplication.shared.open(url)
+    #endif
+}
+
 #if os(macOS)
 private struct EmailWebView: NSViewRepresentable {
     let html: String
@@ -131,9 +140,9 @@ private struct EmailWebView: NSViewRepresentable {
         let configuration = WKWebViewConfiguration()
         let view = PassthroughScrollWebView(frame: .zero, configuration: configuration)
         view.navigationDelegate = context.coordinator
-        // Opaque white canvas — the email body owns its own background. This is
-        // what real mail clients do; the surrounding chrome can be any theme.
+        // Opaque white canvas — the email body owns its own background.
         view.setValue(true, forKey: "drawsBackground")
+        view.allowsLinkPreview = true
         view.loadHTMLString(html, baseURL: nil)
         return view
     }
@@ -151,6 +160,46 @@ private struct EmailWebView: NSViewRepresentable {
 
         init(contentHeight: Binding<CGFloat>) {
             _contentHeight = contentHeight
+        }
+
+        // Intercept link clicks → open in the user's default browser / mail
+        // client / phone. Allow only the initial inline HTML load.
+        func webView(
+            _ webView: WKWebView,
+            decidePolicyFor navigationAction: WKNavigationAction,
+            decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
+        ) {
+            // First load of the inline HTML: allow.
+            if navigationAction.navigationType == .other,
+               navigationAction.request.url == nil ||
+               navigationAction.request.url?.absoluteString == "about:blank" {
+                decisionHandler(.allow)
+                return
+            }
+
+            if let url = navigationAction.request.url {
+                // Treat any user-initiated click (including from JS-redirects
+                // wrapped as `linkActivated`) as an external open.
+                switch navigationAction.navigationType {
+                case .linkActivated, .formSubmitted, .formResubmitted, .reload, .backForward:
+                    openExternal(url)
+                    decisionHandler(.cancel)
+                    return
+                case .other:
+                    // Some emails issue meta-refresh / JS redirects that arrive
+                    // as .other — bounce anything that isn't the initial load.
+                    if url.scheme == "http" || url.scheme == "https" ||
+                       url.scheme == "mailto" || url.scheme == "tel" {
+                        openExternal(url)
+                        decisionHandler(.cancel)
+                        return
+                    }
+                @unknown default:
+                    break
+                }
+            }
+
+            decisionHandler(.allow)
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -183,14 +232,14 @@ private struct EmailWebView: UIViewRepresentable {
         let configuration = WKWebViewConfiguration()
         let view = WKWebView(frame: .zero, configuration: configuration)
         view.navigationDelegate = context.coordinator
-        // Opaque white canvas. The body's CSS owns the background, so we don't
-        // want to bleed the cream/ink theme onto the email's content.
         view.backgroundColor = .white
         view.isOpaque = true
         view.scrollView.backgroundColor = .white
         view.scrollView.isScrollEnabled = false
-        // Force light appearance inside the WebView regardless of system trait.
         view.overrideUserInterfaceStyle = .light
+        // Long-press preview gives the native context menu (Open, Open in
+        // Background, Copy Link, Share) on iOS.
+        view.allowsLinkPreview = true
         view.loadHTMLString(html, baseURL: nil)
         return view
     }
@@ -202,12 +251,46 @@ private struct EmailWebView: UIViewRepresentable {
         }
     }
 
-    final class Coordinator: NSObject, WKNavigationDelegate {
+    final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
         @Binding var contentHeight: CGFloat
         var html = ""
 
         init(contentHeight: Binding<CGFloat>) {
             _contentHeight = contentHeight
+        }
+
+        func webView(
+            _ webView: WKWebView,
+            decidePolicyFor navigationAction: WKNavigationAction,
+            decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
+        ) {
+            // Allow the initial loadHTMLString through.
+            if navigationAction.navigationType == .other,
+               navigationAction.request.url == nil ||
+               navigationAction.request.url?.absoluteString == "about:blank" {
+                decisionHandler(.allow)
+                return
+            }
+
+            if let url = navigationAction.request.url {
+                switch navigationAction.navigationType {
+                case .linkActivated, .formSubmitted, .formResubmitted, .reload, .backForward:
+                    openExternal(url)
+                    decisionHandler(.cancel)
+                    return
+                case .other:
+                    if url.scheme == "http" || url.scheme == "https" ||
+                       url.scheme == "mailto" || url.scheme == "tel" {
+                        openExternal(url)
+                        decisionHandler(.cancel)
+                        return
+                    }
+                @unknown default:
+                    break
+                }
+            }
+
+            decisionHandler(.allow)
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {

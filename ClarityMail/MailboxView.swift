@@ -117,9 +117,6 @@ struct MailboxView: View {
                 .scrollIndicators(.hidden)
 
                 BottomActionBar(
-                    folderTitle: selectedFolder.title,
-                    unreadCount: unreadCount,
-                    onMail: { /* already in mail */ },
                     onCompose: { isShowingComposer = true }
                 )
             }
@@ -1557,12 +1554,6 @@ private struct AuroraHeader: View {
         return formatter.string(from: .now).uppercased()
     }
 
-    private var volumeLabel: String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyyMMdd"
-        return "VOL. \(formatter.string(from: .now))"
-    }
-
     var body: some View {
         HStack(alignment: .center, spacing: 14) {
             // Editorial wordmark — small ink square + serif name in two lines.
@@ -1577,15 +1568,9 @@ private struct AuroraHeader: View {
                         .foregroundStyle(Theme.Palette.background)
                 }
 
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("ClarityMail")
-                        .font(.system(size: 15, weight: .bold, design: .serif))
-                        .foregroundStyle(Theme.Palette.textPrimary)
-                    Text(volumeLabel)
-                        .font(Theme.Typography.mono(9, weight: .semibold))
-                        .tracking(1.4)
-                        .foregroundStyle(Theme.Palette.textTertiary)
-                }
+                Text("ClarityMail")
+                    .font(.system(size: 15, weight: .bold, design: .serif))
+                    .foregroundStyle(Theme.Palette.textPrimary)
             }
 
             Spacer()
@@ -1644,21 +1629,8 @@ private struct GreetingBlock: View {
         return "\(metric) · @\(name.lowercased())"
     }
 
-    private var sectionLabel: String {
-        if isPriorityMode { return "Section A — flagged" }
-        switch selectedFolder {
-        case .inbox:   return "Section A — incoming"
-        case .sent:    return "Section B — outgoing"
-        case .drafts:  return "Section C — pending"
-        case .archive: return "Section D — filed"
-        case .trash:   return "Section E — discarded"
-        }
-    }
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            EyebrowLabel(text: sectionLabel, trailing: nil, accent: Theme.Palette.accent)
-
+        VStack(alignment: .leading, spacing: 12) {
             Text(headline)
                 .font(Theme.Typography.display(58))
                 .foregroundStyle(Theme.Palette.textPrimary)
@@ -2042,9 +2014,6 @@ private extension Image {
 // MARK: - Bottom Action Bar (editorial footer)
 
 private struct BottomActionBar: View {
-    let folderTitle: String
-    let unreadCount: Int
-    let onMail: () -> Void
     let onCompose: () -> Void
 
     var body: some View {
@@ -2054,36 +2023,12 @@ private struct BottomActionBar: View {
                 .frame(height: 1)
 
             HStack(alignment: .center, spacing: 14) {
-                Button(action: onMail) {
-                    HStack(spacing: 8) {
-                        Rectangle()
-                            .fill(Theme.Palette.accent)
-                            .frame(width: 14, height: 1.5)
-                        Text(folderTitle.uppercased())
-                            .font(Theme.Typography.mono(11, weight: .heavy))
-                            .tracking(2.0)
-                            .foregroundStyle(Theme.Palette.textPrimary)
-                    }
-                }
-                .buttonStyle(.plain)
-
-                if unreadCount > 0 {
-                    Text("·")
-                        .font(.system(size: 13, weight: .bold))
-                        .foregroundStyle(Theme.Palette.textTertiary)
-                    Text("\(unreadCount) UNREAD")
-                        .font(Theme.Typography.mono(10, weight: .semibold))
-                        .tracking(1.6)
-                        .foregroundStyle(Theme.Palette.textTertiary)
-                }
-
                 Spacer()
-
                 ComposeButton(action: onCompose)
             }
             .padding(.horizontal, Theme.Layout.gutter)
             .padding(.vertical, 12)
-            .background(Theme.Palette.background.opacity(0.97))
+            .background(Theme.Palette.background)
         }
     }
 }
