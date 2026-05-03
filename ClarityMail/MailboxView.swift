@@ -52,112 +52,68 @@ struct MailboxView: View {
                     .ignoresSafeArea()
                     .opacity(0.85)
 
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 0) {
-                        AuroraHeader(
-                            unreadCount: unreadCount,
-                            onOpenSettings: { isShowingSettings = true },
-                            onAddAccount: { Task { await session.signInWithGoogle() } }
-                        )
-                            .pageGutter()
-                            .padding(.top, 14)
-                            .padding(.bottom, 14)
+                List {
+                    headerSection
 
-                        Rectangle()
-                            .fill(Theme.Palette.borderStrong)
-                            .frame(height: 1)
-
-                        GreetingBlock(
-                            name: session.displayName,
-                            unreadCount: unreadCount,
-                            messageCount: emails.count,
-                            selectedFolder: selectedFolder,
-                            isPriorityMode: isPriorityMode
-                        )
-                            .pageGutter()
-                            .padding(.top, 26)
-                            .padding(.bottom, 22)
-
-                        AccountSearchBar(
-                            accounts: accounts,
-                            selectedAccountId: $selectedAccountId,
-                            selectedFolder: $selectedFolder,
-                            isPriorityMode: $isPriorityMode,
-                            searchText: $searchText,
-                            onAddAccount: {
-                                Task { await session.signInWithGoogle() }
-                            },
-                            onRefreshAccounts: {
-                                Task {
-                                    await loadAccounts()
-                                    await loadEmails()
-                                }
-                            },
-                            onManageBlockedSenders: {
-                                isShowingBlockedSenders = true
-                            },
-                            onManageMutedSenders: {
-                                isShowingMutedSenders = true
-                            },
-                            onOpenSettings: {
-                                isShowingSettings = true
-                            }
-                        )
-                        .pageGutter()
-                        .padding(.bottom, 14)
-
-                        Rectangle()
-                            .fill(Theme.Palette.border)
-                            .frame(height: 0.5)
-                            .padding(.bottom, 4)
-
-                        EmailListSection(
-                            emails: emails,
-                            isPriorityMode: isPriorityMode,
-                            isLoading: isLoading,
-                            isSearchLoading: isLoading && !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                            isLoadingMore: isLoadingMore,
-                            canLoadMore: nextPageToken != nil,
-                            errorMessage: errorMessage,
-                            selectedEmailIds: selectedEmailIds,
-                            isSelectionMode: isSelectionMode,
-                            isPerformingBulkAction: isPerformingBulkAction,
-                            selectedFolder: selectedFolder,
-                            onSetSelectionMode: { isEnabled in
-                                isSelectionMode = isEnabled
-                                if !isEnabled {
-                                    selectedEmailIds.removeAll()
-                                }
-                            },
-                            onSelectAll: {
-                                selectedEmailIds = Set(emails.map(\.id))
-                                isSelectionMode = true
-                            },
-                            onToggleSelection: { email in
-                                toggleSelection(email)
-                            },
-                            onBulkAction: { action in
-                                Task { await performBulkAction(action) }
-                            },
-                            onEmailAction: { action, email in
-                                Task { await performSingleAction(action, email: email) }
-                            },
-                            onSelect: { email in
-                                if selectedFolder == .drafts || email.draftId != nil {
-                                    draftToEdit = email
-                                } else {
-                                    selectedEmail = email
-                                }
-                            },
-                            onLoadMore: {
-                                Task { await loadMoreEmails() }
-                            }
-                        )
-                        .pageGutter()
-
-                        Color.clear.frame(height: 96)
+                    if let errorMessage {
+                        Text(errorMessage)
+                            .font(.system(size: 13))
+                            .foregroundStyle(Theme.Palette.warm)
+                            .listRowSeparator(.hidden)
+                            .listRowBackground(Color.clear)
+                            .listRowInsets(EdgeInsets(top: 14, leading: Theme.Layout.gutter, bottom: 0, trailing: Theme.Layout.gutter))
                     }
+
+                    if !emails.isEmpty {
+                        selectionToolbar
+                            .listRowSeparator(.hidden)
+                            .listRowBackground(Color.clear)
+                            .listRowInsets(EdgeInsets(top: 10, leading: Theme.Layout.gutter, bottom: 6, trailing: Theme.Layout.gutter))
+                    }
+
+                    if isSearchLoading {
+                        SearchLoadingView()
+                            .frame(maxWidth: .infinity)
+                            .frame(minHeight: 240)
+                            .listRowSeparator(.hidden)
+                            .listRowBackground(Color.clear)
+                            .listRowInsets(EdgeInsets(top: 12, leading: Theme.Layout.gutter, bottom: 0, trailing: Theme.Layout.gutter))
+                    } else if isLoading && emails.isEmpty {
+                        ProgressView()
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 40)
+                            .listRowSeparator(.hidden)
+                            .listRowBackground(Color.clear)
+                    } else {
+                        ForEach(emails) { email in
+                            emailRow(for: email)
+                        }
+
+                        if canLoadMore {
+                            ProgressView()
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 20)
+                                .listRowSeparator(.hidden)
+                                .listRowBackground(Color.clear)
+                                .onAppear { Task { await loadMoreEmails() } }
+                        } else if isLoadingMore {
+                            ProgressView()
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 20)
+                                .listRowSeparator(.hidden)
+                                .listRowBackground(Color.clear)
+                        }
+                    }
+
+                    Color.clear
+                        .frame(height: 96)
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(Color.clear)
+                        .listRowInsets(EdgeInsets())
                 }
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+                .environment(\.defaultMinListRowHeight, 0)
                 .scrollIndicators(.hidden)
 
                 BottomActionBar(
@@ -169,43 +125,47 @@ struct MailboxView: View {
             }
             .overlay(alignment: .bottomTrailing) {
                 #if os(macOS)
-                if isShowingComposer {
-                    ComposerView(
-                        mode: .compose,
-                        accountId: selectedAccountId,
-                        accounts: accounts,
-                        recipientSuggestions: recipientSuggestions,
-                        onSent: {
-                            Task { await loadEmails() }
-                        },
-                        onClose: {
-                            isShowingComposer = false
-                        }
-                    )
-                    .padding(.trailing, 24)
-                    .padding(.bottom, 24)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                    .zIndex(20)
-                }
+                ZStack(alignment: .bottomTrailing) {
+                    if isShowingComposer {
+                        ComposerView(
+                            mode: .compose,
+                            accountId: selectedAccountId,
+                            accounts: accounts,
+                            recipientSuggestions: recipientSuggestions,
+                            onSent: {
+                                Task { await loadEmails() }
+                            },
+                            onClose: {
+                                isShowingComposer = false
+                            }
+                        )
+                        .padding(.trailing, 24)
+                        .padding(.bottom, 24)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .zIndex(20)
+                    }
 
-                if let draftToEdit {
-                    ComposerView(
-                        mode: .draft(draftToEdit),
-                        accountId: selectedAccountId ?? draftToEdit.accountId,
-                        accounts: accounts,
-                        recipientSuggestions: recipientSuggestions,
-                        onSent: {
-                            Task { await loadEmails() }
-                        },
-                        onClose: {
-                            self.draftToEdit = nil
-                        }
-                    )
-                    .padding(.trailing, 24)
-                    .padding(.bottom, 24)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                    .zIndex(20)
+                    if let draftToEdit {
+                        ComposerView(
+                            mode: .draft(draftToEdit),
+                            accountId: selectedAccountId ?? draftToEdit.accountId,
+                            accounts: accounts,
+                            recipientSuggestions: recipientSuggestions,
+                            onSent: {
+                                Task { await loadEmails() }
+                            },
+                            onClose: {
+                                self.draftToEdit = nil
+                            }
+                        )
+                        .padding(.trailing, 24)
+                        .padding(.bottom, 24)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .zIndex(20)
+                    }
                 }
+                .animation(.easeOut(duration: 0.18), value: isShowingComposer)
+                .animation(.easeOut(duration: 0.18), value: draftToEdit)
                 #endif
             }
             .overlay(alignment: .bottom) {
@@ -213,8 +173,6 @@ struct MailboxView: View {
                     .padding(.bottom, 88)
                     .zIndex(30)
             }
-            .animation(.snappy(duration: 0.2), value: isShowingComposer)
-            .animation(.snappy(duration: 0.2), value: draftToEdit)
             .modifier(HideNavigationBarModifier())
             .navigationDestination(item: $selectedEmail) { email in
                 EmailDetailView(
@@ -371,6 +329,235 @@ struct MailboxView: View {
     }
 
     private var unreadCount: Int { emails.filter { !$0.isRead }.count }
+
+    private var canLoadMore: Bool { nextPageToken != nil }
+
+    private var isSearchLoading: Bool {
+        isLoading && !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    // MARK: - List sections
+
+    @ViewBuilder
+    private var headerSection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            AuroraHeader(
+                unreadCount: unreadCount,
+                onOpenSettings: { isShowingSettings = true },
+                onAddAccount: { Task { await session.signInWithGoogle() } }
+            )
+            .pageGutter()
+            .padding(.top, 14)
+            .padding(.bottom, 14)
+
+            Rectangle()
+                .fill(Theme.Palette.borderStrong)
+                .frame(height: 1)
+
+            GreetingBlock(
+                name: session.displayName,
+                unreadCount: unreadCount,
+                messageCount: emails.count,
+                selectedFolder: selectedFolder,
+                isPriorityMode: isPriorityMode
+            )
+            .pageGutter()
+            .padding(.top, 26)
+            .padding(.bottom, 22)
+
+            AccountSearchBar(
+                accounts: accounts,
+                selectedAccountId: $selectedAccountId,
+                selectedFolder: $selectedFolder,
+                isPriorityMode: $isPriorityMode,
+                searchText: $searchText,
+                onAddAccount: {
+                    Task { await session.signInWithGoogle() }
+                },
+                onRefreshAccounts: {
+                    Task {
+                        await loadAccounts()
+                        await loadEmails()
+                    }
+                },
+                onManageBlockedSenders: {
+                    isShowingBlockedSenders = true
+                },
+                onManageMutedSenders: {
+                    isShowingMutedSenders = true
+                },
+                onOpenSettings: {
+                    isShowingSettings = true
+                }
+            )
+            .pageGutter()
+            .padding(.bottom, 14)
+
+            Rectangle()
+                .fill(Theme.Palette.border)
+                .frame(height: 0.5)
+        }
+        .listRowSeparator(.hidden)
+        .listRowBackground(Color.clear)
+        .listRowInsets(EdgeInsets())
+    }
+
+    @ViewBuilder
+    private func emailRow(for email: Email) -> some View {
+        EmailRowView(
+            email: email,
+            showPriorityLabel: isPriorityMode || email.isManualPrioritySender,
+            isSelectionMode: isSelectionMode,
+            isSelected: selectedEmailIds.contains(email.id),
+            onToggleSelection: { toggleSelection(email) }
+        )
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if isSelectionMode {
+                toggleSelection(email)
+            } else if selectedFolder == .drafts || email.draftId != nil {
+                draftToEdit = email
+            } else {
+                selectedEmail = email
+            }
+        }
+        .listRowSeparator(.hidden)
+        .listRowBackground(Color.clear)
+        .listRowInsets(EdgeInsets(top: 0, leading: Theme.Layout.gutter, bottom: 0, trailing: Theme.Layout.gutter))
+        .swipeActions(edge: .leading, allowsFullSwipe: false) {
+            if selectedFolder != .drafts {
+                Button {
+                    Task { await performSingleAction(email.isPinned == true ? .unpin : .pin, email: email) }
+                } label: {
+                    Label(
+                        email.isPinned == true ? "Unpin" : "Pin",
+                        systemImage: email.isPinned == true ? "pin.slash" : "pin"
+                    )
+                }
+                .tint(Theme.Palette.warm)
+
+                Button {
+                    Task { await performSingleAction(email.isRead ? .markUnread : .markRead, email: email) }
+                } label: {
+                    Label(
+                        email.isRead ? "Unread" : "Read",
+                        systemImage: email.isRead ? "envelope.badge" : "envelope.open"
+                    )
+                }
+                .tint(Theme.Palette.accent)
+            }
+        }
+        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+            Button(role: .destructive) {
+                Task { await performSingleAction(.trash, email: email) }
+            } label: {
+                Label(email.draftId == nil ? "Trash" : "Delete", systemImage: "trash")
+            }
+
+            if selectedFolder != .drafts && selectedFolder != .sent {
+                Button {
+                    Task { await performSingleAction(.archive, email: email) }
+                } label: {
+                    Label("Archive", systemImage: "archivebox")
+                }
+                .tint(Theme.Palette.accentCyan)
+            }
+        }
+        .contextMenu {
+            Button {
+                toggleSelection(email)
+            } label: {
+                Label(
+                    selectedEmailIds.contains(email.id) ? "Deselect" : "Select",
+                    systemImage: "checkmark.circle"
+                )
+            }
+            Button {
+                Task { await performSingleAction(email.isPinned == true ? .unpin : .pin, email: email) }
+            } label: {
+                Label(
+                    email.isPinned == true ? "Unpin" : "Pin",
+                    systemImage: email.isPinned == true ? "pin.slash" : "pin"
+                )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var selectionToolbar: some View {
+        ScrollView(.horizontal) {
+            HStack(spacing: 8) {
+                Button {
+                    let next = !isSelectionMode
+                    isSelectionMode = next
+                    if !next { selectedEmailIds.removeAll() }
+                } label: {
+                    Label(isSelectionMode ? "Cancel" : "Select", systemImage: isSelectionMode ? "xmark" : "checkmark.circle")
+                }
+                .buttonStyle(BulkActionButtonStyle())
+
+                if isSelectionMode {
+                    Button {
+                        selectedEmailIds = Set(emails.map(\.id))
+                        isSelectionMode = true
+                    } label: {
+                        Label("Select All", systemImage: "checkmark.circle.fill")
+                    }
+                    .buttonStyle(BulkActionButtonStyle())
+
+                    Text("\(selectedEmailIds.count) SELECTED")
+                        .font(Theme.Typography.mono(10, weight: .heavy))
+                        .tracking(1.4)
+                        .foregroundStyle(Theme.Palette.textSecondary)
+                        .frame(minWidth: 92, alignment: .leading)
+
+                    bulkActionButton(.archive)
+                        .disabled(selectedFolder == .drafts || selectedFolder == .sent || selectedEmailIds.isEmpty)
+                    bulkActionButton(.trash)
+                        .disabled(selectedEmailIds.isEmpty)
+                    bulkActionButton(.markRead)
+                        .disabled(selectedFolder == .drafts || selectedEmailIds.isEmpty)
+                    bulkActionButton(.markUnread)
+                        .disabled(selectedFolder == .drafts || selectedEmailIds.isEmpty)
+
+                    Menu {
+                        Button { Task { await performBulkAction(.star) } } label: {
+                            Label("Star", systemImage: "star")
+                        }
+                        Button { Task { await performBulkAction(.unstar) } } label: {
+                            Label("Unstar", systemImage: "star.slash")
+                        }
+                        Button { Task { await performBulkAction(.pin) } } label: {
+                            Label("Pin", systemImage: "pin")
+                        }
+                        Button { Task { await performBulkAction(.unpin) } } label: {
+                            Label("Unpin", systemImage: "pin.slash")
+                        }
+                    } label: {
+                        Image(systemName: isPerformingBulkAction ? "hourglass" : "ellipsis")
+                            .font(.system(size: 13, weight: .heavy))
+                            .frame(width: 36, height: 30)
+                    }
+                    .buttonStyle(BulkActionButtonStyle())
+                    .disabled(selectedFolder == .drafts || selectedEmailIds.isEmpty || isPerformingBulkAction)
+                }
+            }
+        }
+        .scrollIndicators(.hidden)
+    }
+
+    @ViewBuilder
+    private func bulkActionButton(_ action: BulkEmailAction) -> some View {
+        Button {
+            Task { await performBulkAction(action) }
+        } label: {
+            Label(action.title, systemImage: action.systemImage)
+                .labelStyle(.iconOnly)
+                .frame(width: 36, height: 30)
+        }
+        .buttonStyle(BulkActionButtonStyle())
+        .disabled(selectedEmailIds.isEmpty || isPerformingBulkAction)
+    }
 
     private func resetMailboxState(clearEmails: Bool = true) {
         mailboxRequestID = UUID()
@@ -1139,7 +1326,7 @@ private struct AccountSearchBar: View {
             ScrollView(.horizontal) {
                 HStack(alignment: .firstTextBaseline, spacing: 22) {
                     PriorityRailItem(isOn: isPriorityMode) {
-                        withAnimation(Theme.Motion.snappy) { isPriorityMode.toggle() }
+                        isPriorityMode.toggle()
                     }
 
                     ForEach(MailboxFolder.allCases) { folder in
@@ -1147,10 +1334,8 @@ private struct AccountSearchBar: View {
                             title: folder.title,
                             isActive: !isPriorityMode && selectedFolder == folder
                         ) {
-                            withAnimation(Theme.Motion.snappy) {
-                                if isPriorityMode { isPriorityMode = false }
-                                selectedFolder = folder
-                            }
+                            if isPriorityMode { isPriorityMode = false }
+                            selectedFolder = folder
                         }
                     }
 
@@ -1527,405 +1712,24 @@ private enum BulkEmailAction: String, CaseIterable {
     }
 }
 
-private struct EmailListSection: View {
-    let emails: [Email]
-    let isPriorityMode: Bool
-    let isLoading: Bool
-    let isSearchLoading: Bool
-    let isLoadingMore: Bool
-    let canLoadMore: Bool
-    let errorMessage: String?
-    let selectedEmailIds: Set<Email.ID>
-    let isSelectionMode: Bool
-    let isPerformingBulkAction: Bool
-    let selectedFolder: MailboxFolder
-    let onSetSelectionMode: (Bool) -> Void
-    let onSelectAll: () -> Void
-    let onToggleSelection: (Email) -> Void
-    let onBulkAction: (BulkEmailAction) -> Void
-    let onEmailAction: (BulkEmailAction, Email) -> Void
-    let onSelect: (Email) -> Void
-    let onLoadMore: () -> Void
-
-    private var selectedCount: Int { selectedEmailIds.count }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            if let errorMessage {
-                Text(errorMessage)
-                    .font(.system(size: 13))
-                    .foregroundStyle(Theme.Palette.warm)
-                    .padding(.horizontal, 4)
-            }
-
-            if !emails.isEmpty {
-                selectionToolbar
-            }
-
-            if isSearchLoading {
-                SearchLoadingView()
-                    .frame(maxWidth: .infinity)
-                    .frame(minHeight: 260)
-            } else if isLoading && emails.isEmpty {
-                ProgressView()
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 40)
-            } else {
-                LazyVStack(spacing: 0) {
-                    ForEach(emails) { email in
-                        SwipeableEmailRow(
-                            isEnabled: !isSelectionMode,
-                            leadingActions: leadingSwipeActions(for: email),
-                            trailingActions: trailingSwipeActions(for: email),
-                            onTap: {
-                                if isSelectionMode {
-                                    onToggleSelection(email)
-                                } else {
-                                    onSelect(email)
-                                }
-                            }
-                        ) {
-                            EmailRowView(
-                                email: email,
-                                showPriorityLabel: isPriorityMode || email.isManualPrioritySender,
-                                isSelectionMode: isSelectionMode,
-                                isSelected: selectedEmailIds.contains(email.id),
-                                onToggleSelection: {
-                                    onToggleSelection(email)
-                                }
-                            )
-                        }
-                        .contextMenu {
-                            Button {
-                                onToggleSelection(email)
-                            } label: {
-                                Label(selectedEmailIds.contains(email.id) ? "Deselect" : "Select", systemImage: "checkmark.circle")
-                            }
-                            Button {
-                                onEmailAction(email.isPinned == true ? .unpin : .pin, email)
-                            } label: {
-                                Label(email.isPinned == true ? "Unpin" : "Pin", systemImage: email.isPinned == true ? "pin.slash" : "pin")
-                            }
-                        }
-                    }
-
-                    if canLoadMore {
-                        ProgressView()
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 20)
-                            .onAppear(perform: onLoadMore)
-                    } else if isLoadingMore {
-                        ProgressView()
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 20)
-                    }
-                }
-            }
-        }
-    }
-
-    private var selectionToolbar: some View {
-        ScrollView(.horizontal) {
-            HStack(spacing: 10) {
-                Button {
-                    onSetSelectionMode(!isSelectionMode)
-                } label: {
-                    Label(isSelectionMode ? "Cancel" : "Select", systemImage: isSelectionMode ? "xmark" : "checkmark.circle")
-                }
-                .buttonStyle(BulkActionButtonStyle())
-
-                if isSelectionMode {
-                    Button {
-                        onSelectAll()
-                    } label: {
-                        Label("Select All", systemImage: "checkmark.circle.fill")
-                    }
-                    .buttonStyle(BulkActionButtonStyle())
-
-                    Text("\(selectedCount) selected")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(Theme.Palette.textSecondary)
-                        .frame(minWidth: 70, alignment: .leading)
-
-                    bulkActionButton(.archive)
-                        .disabled(selectedFolder == .drafts || selectedFolder == .sent || selectedCount == 0)
-                    bulkActionButton(.trash)
-                        .disabled(selectedCount == 0)
-                    bulkActionButton(.markRead)
-                        .disabled(selectedFolder == .drafts || selectedCount == 0)
-                    bulkActionButton(.markUnread)
-                        .disabled(selectedFolder == .drafts || selectedCount == 0)
-
-                    Menu {
-                        Button {
-                            onBulkAction(.star)
-                        } label: {
-                            Label("Star", systemImage: "star")
-                        }
-                        Button {
-                            onBulkAction(.unstar)
-                        } label: {
-                            Label("Unstar", systemImage: "star.slash")
-                        }
-                        Button {
-                            onBulkAction(.pin)
-                        } label: {
-                            Label("Pin", systemImage: "pin")
-                        }
-                        Button {
-                            onBulkAction(.unpin)
-                        } label: {
-                            Label("Unpin", systemImage: "pin.slash")
-                        }
-                    } label: {
-                        Image(systemName: isPerformingBulkAction ? "hourglass" : "ellipsis")
-                            .font(.system(size: 15, weight: .semibold))
-                            .frame(width: 36, height: 32)
-                    }
-                    .buttonStyle(BulkActionButtonStyle())
-                    .disabled(selectedFolder == .drafts || selectedCount == 0 || isPerformingBulkAction)
-                }
-            }
-        }
-        .padding(.horizontal, 4)
-        .scrollIndicators(.hidden)
-        .animation(.snappy(duration: 0.18), value: isSelectionMode)
-        .animation(.snappy(duration: 0.18), value: selectedCount)
-    }
-
-    private func bulkActionButton(_ action: BulkEmailAction) -> some View {
-        Button {
-            onBulkAction(action)
-        } label: {
-            Label(action.title, systemImage: action.systemImage)
-                .labelStyle(.iconOnly)
-                .frame(width: 36, height: 32)
-        }
-        .buttonStyle(BulkActionButtonStyle())
-        .disabled(selectedCount == 0 || isPerformingBulkAction)
-    }
-
-    private func leadingSwipeActions(for email: Email) -> [RowSwipeAction] {
-        guard selectedFolder != .drafts else { return [] }
-
-        return [
-            RowSwipeAction(
-                id: email.isPinned == true ? "unpin" : "pin",
-                title: email.isPinned == true ? "Unpin" : "Pin",
-                systemImage: email.isPinned == true ? "pin.slash" : "pin",
-                tint: Theme.Palette.warm,
-                action: { onEmailAction(email.isPinned == true ? .unpin : .pin, email) }
-            ),
-            RowSwipeAction(
-                id: email.isRead ? "unread" : "read",
-                title: email.isRead ? "Unread" : "Read",
-                systemImage: email.isRead ? "envelope.badge" : "envelope.open",
-                tint: Theme.Palette.accent,
-                action: { onEmailAction(email.isRead ? .markUnread : .markRead, email) }
-            )
-        ]
-    }
-
-    private func trailingSwipeActions(for email: Email) -> [RowSwipeAction] {
-        var actions: [RowSwipeAction] = []
-
-        if selectedFolder != .drafts && selectedFolder != .sent {
-            actions.append(
-                RowSwipeAction(
-                    id: "archive",
-                    title: "Archive",
-                    systemImage: "archivebox",
-                    tint: .blue,
-                    action: { onEmailAction(.archive, email) }
-                )
-            )
-        }
-
-        actions.append(
-            RowSwipeAction(
-                id: "trash",
-                title: email.draftId == nil ? "Trash" : "Delete",
-                systemImage: "trash",
-                tint: .red,
-                action: { onEmailAction(.trash, email) }
-            )
-        )
-
-        return actions
-    }
-}
 
 private struct BulkActionButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 12, weight: .semibold))
+            .font(Theme.Typography.mono(10, weight: .heavy))
+            .tracking(1.2)
             .foregroundStyle(Theme.Palette.textPrimary)
-            .padding(.horizontal, 11)
-            .frame(minHeight: 32)
-            .background(
-                Capsule().fill(Theme.Palette.surface)
-            )
+            .padding(.horizontal, 10)
+            .frame(minHeight: 30)
+            .background(Theme.Palette.background)
             .overlay(
-                Capsule().strokeBorder(Theme.Palette.border, lineWidth: 1)
+                RoundedRectangle(cornerRadius: Theme.Radius.button, style: .continuous)
+                    .strokeBorder(Theme.Palette.borderStrong, lineWidth: 1)
             )
-            .opacity(configuration.isPressed ? 0.78 : 1)
-            .scaleEffect(configuration.isPressed ? 0.97 : 1)
-            .animation(Theme.Motion.snappy, value: configuration.isPressed)
+            .opacity(configuration.isPressed ? 0.7 : 1)
     }
 }
 
-private struct RowSwipeAction: Identifiable {
-    let id: String
-    let title: String
-    let systemImage: String
-    let tint: Color
-    let action: () -> Void
-}
-
-private struct SwipeableEmailRow<Content: View>: View {
-    let isEnabled: Bool
-    let leadingActions: [RowSwipeAction]
-    let trailingActions: [RowSwipeAction]
-    let onTap: () -> Void
-    private let content: () -> Content
-
-    @State private var settledOffset: CGFloat = 0
-    @GestureState private var dragOffset: CGFloat = 0
-
-    private let actionWidth: CGFloat = 78
-    private let revealThreshold: CGFloat = 54
-    private let fullSwipeThreshold: CGFloat = 132
-
-    init(
-        isEnabled: Bool,
-        leadingActions: [RowSwipeAction],
-        trailingActions: [RowSwipeAction],
-        onTap: @escaping () -> Void,
-        @ViewBuilder content: @escaping () -> Content
-    ) {
-        self.isEnabled = isEnabled
-        self.leadingActions = leadingActions
-        self.trailingActions = trailingActions
-        self.onTap = onTap
-        self.content = content
-    }
-
-    private var maxLeadingOffset: CGFloat {
-        CGFloat(leadingActions.count) * actionWidth
-    }
-
-    private var maxTrailingOffset: CGFloat {
-        CGFloat(trailingActions.count) * actionWidth
-    }
-
-    private var currentOffset: CGFloat {
-        clamped(settledOffset + dragOffset)
-    }
-
-    var body: some View {
-        ZStack {
-            swipeBackground
-                .opacity(abs(currentOffset) > 1 ? 1 : 0)
-
-            content()
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .offset(x: isEnabled ? currentOffset : 0)
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    if abs(settledOffset) > 1 {
-                        close()
-                    } else {
-                        onTap()
-                    }
-                }
-                .simultaneousGesture(rowDragGesture)
-        }
-        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.row, style: .continuous))
-        .animation(.snappy(duration: 0.18), value: settledOffset)
-        .onChange(of: isEnabled) { _, enabled in
-            if !enabled {
-                close()
-            }
-        }
-    }
-
-    private var swipeBackground: some View {
-        HStack(spacing: 0) {
-            if currentOffset > 1 {
-                ForEach(leadingActions) { actionButton($0) }
-                Spacer(minLength: 0)
-            } else if currentOffset < -1 {
-                Spacer(minLength: 0)
-                ForEach(trailingActions.reversed()) { actionButton($0) }
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Theme.Palette.surfaceMuted)
-    }
-
-    private func actionButton(_ swipeAction: RowSwipeAction) -> some View {
-        Button {
-            swipeAction.action()
-            close()
-        } label: {
-            VStack(spacing: 5) {
-                Image(systemName: swipeAction.systemImage)
-                    .font(.system(size: 16, weight: .semibold))
-
-                Text(swipeAction.title)
-                    .font(.system(size: 11, weight: .semibold))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-            }
-            .foregroundStyle(.white)
-            .frame(width: actionWidth)
-            .frame(maxHeight: .infinity)
-            .background(swipeAction.tint.opacity(0.92))
-        }
-        .buttonStyle(.plain)
-    }
-
-    private var rowDragGesture: some Gesture {
-        DragGesture(minimumDistance: 18, coordinateSpace: .local)
-            .updating($dragOffset) { value, state, _ in
-                guard isEnabled, isHorizontalDrag(value) else { return }
-                state = value.translation.width
-            }
-            .onEnded { value in
-                guard isEnabled, isHorizontalDrag(value) else { return }
-
-                let proposedOffset = clamped(settledOffset + value.translation.width)
-
-                if proposedOffset > fullSwipeThreshold, let action = leadingActions.first {
-                    action.action()
-                    close()
-                } else if proposedOffset < -fullSwipeThreshold, let action = trailingActions.first {
-                    action.action()
-                    close()
-                } else if proposedOffset > revealThreshold, !leadingActions.isEmpty {
-                    settledOffset = maxLeadingOffset
-                } else if proposedOffset < -revealThreshold, !trailingActions.isEmpty {
-                    settledOffset = -maxTrailingOffset
-                } else {
-                    close()
-                }
-            }
-    }
-
-    private func isHorizontalDrag(_ value: DragGesture.Value) -> Bool {
-        abs(value.translation.width) > max(24, abs(value.translation.height) * 1.35)
-    }
-
-    private func clamped(_ value: CGFloat) -> CGFloat {
-        min(max(value, -maxTrailingOffset), maxLeadingOffset)
-    }
-
-    private func close() {
-        withAnimation(.snappy(duration: 0.18)) {
-            settledOffset = 0
-        }
-    }
-}
 
 private struct SearchLoadingView: View {
     var body: some View {

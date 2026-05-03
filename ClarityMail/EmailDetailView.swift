@@ -98,18 +98,22 @@ struct EmailDetailView: View {
                     Color.clear.frame(height: 40)
                 }
                 .frame(maxWidth: detailMaxWidth, alignment: .leading)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .center)
             }
             .scrollIndicators(.hidden)
 
             #if os(macOS)
-            if isShowingReply {
-                composerOverlay(mode: .reply(visibleEmail), isPresented: $isShowingReply)
-            }
+            ZStack {
+                if isShowingReply {
+                    composerOverlay(mode: .reply(visibleEmail), isPresented: $isShowingReply)
+                }
 
-            if isShowingForward {
-                composerOverlay(mode: .forward(visibleEmail), isPresented: $isShowingForward)
+                if isShowingForward {
+                    composerOverlay(mode: .forward(visibleEmail), isPresented: $isShowingForward)
+                }
             }
+            .animation(.easeOut(duration: 0.18), value: isShowingReply)
+            .animation(.easeOut(duration: 0.18), value: isShowingForward)
             #endif
 
             VStack {
@@ -119,7 +123,6 @@ struct EmailDetailView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .animation(.snappy(duration: 0.2), value: isShowingReply)
         .navigationTitle("")
         #if os(iOS)
         .sheet(isPresented: $isShowingReply) {
