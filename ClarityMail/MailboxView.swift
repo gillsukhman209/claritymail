@@ -1893,38 +1893,12 @@ private struct EmailRowView: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            // Unread/selection indicator — single saffron dot or bullet.
-            ZStack {
-                if isSelectionMode {
-                    RoundedRectangle(cornerRadius: 2)
-                        .strokeBorder(
-                            isSelected ? Theme.Palette.accent : Theme.Palette.borderStrong,
-                            lineWidth: 1
-                        )
-                        .background(
-                            RoundedRectangle(cornerRadius: 2)
-                                .fill(isSelected ? Theme.Palette.accent : Color.clear)
-                        )
-                        .frame(width: 11, height: 11)
-                        .overlay {
-                            if isSelected {
-                                Image(systemName: "checkmark")
-                                    .font(.system(size: 7, weight: .black))
-                                    .foregroundStyle(.white)
-                            }
-                        }
-                } else if isUnread {
-                    Circle()
-                        .fill(Theme.Palette.accent)
-                        .frame(width: 6, height: 6)
-                } else {
-                    Color.clear.frame(width: 6, height: 6)
-                }
-            }
-            .frame(width: 14, height: 16, alignment: .center)
-            .padding(.top, 14)
-            .onTapGesture {
-                if isSelectionMode { onToggleSelection() }
+            if isSelectionMode {
+                selectionIndicator
+                    .padding(.top, 14)
+                    .onTapGesture {
+                        onToggleSelection()
+                    }
             }
 
             SenderLogoView(email: email, size: 38)
@@ -1951,11 +1925,19 @@ private struct EmailRowView: View {
 
                     Spacer(minLength: 4)
 
-                    Text(email.receivedAt.emailRowDateText.replacingOccurrences(of: "\n", with: " · ").uppercased())
-                        .font(Theme.Typography.mono(10, weight: .semibold))
-                        .tracking(1.0)
-                        .foregroundStyle(isUnread ? Theme.Palette.textSecondary : Theme.Palette.textTertiary)
-                        .lineLimit(1)
+                    HStack(alignment: .center, spacing: 6) {
+                        Text(email.receivedAt.emailRowDateText.replacingOccurrences(of: "\n", with: " · ").uppercased())
+                            .font(Theme.Typography.mono(10, weight: .semibold))
+                            .tracking(1.0)
+                            .foregroundStyle(isUnread ? Theme.Palette.textSecondary : Theme.Palette.textTertiary)
+                            .lineLimit(1)
+
+                        if isUnread {
+                            Circle()
+                                .fill(Theme.Palette.accent)
+                                .frame(width: 6, height: 6)
+                        }
+                    }
                 }
 
                 Text(email.subject)
@@ -2009,6 +1991,27 @@ private struct EmailRowView: View {
         .onLongPressGesture {
             onToggleSelection()
         }
+    }
+
+    private var selectionIndicator: some View {
+        RoundedRectangle(cornerRadius: 2)
+            .strokeBorder(
+                isSelected ? Theme.Palette.accent : Theme.Palette.borderStrong,
+                lineWidth: 1
+            )
+            .background(
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(isSelected ? Theme.Palette.accent : Color.clear)
+            )
+            .frame(width: 11, height: 11)
+            .overlay {
+                if isSelected {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 7, weight: .black))
+                        .foregroundStyle(.white)
+                }
+            }
+            .frame(width: 14, height: 16, alignment: .center)
     }
 
     private var rowFill: Color {
