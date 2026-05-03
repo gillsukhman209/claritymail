@@ -7,6 +7,9 @@
 
 import SwiftUI
 import UniformTypeIdentifiers
+#if os(iOS)
+import PhotosUI
+#endif
 
 struct ComposerView: View {
     enum Mode {
@@ -42,6 +45,9 @@ struct ComposerView: View {
     @State private var forwardedHTMLBody: String?
     @State private var attachments: [ComposerAttachment] = []
     @State private var isShowingFileImporter = false
+    #if os(iOS)
+    @State private var selectedPhotoItems: [PhotosPickerItem] = []
+    #endif
     @State private var isShowingSendLaterSheet = false
     @State private var scheduledSendDate = Date().addingTimeInterval(3600)
     @State private var isSending = false
@@ -87,7 +93,8 @@ struct ComposerView: View {
         !isSending &&
         !cleanedRecipients(to).isEmpty &&
         (!messageBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || forwardedHTMLBody != nil) &&
-        attachmentBytes <= maxAttachmentBytes
+        attachmentBytes <= maxAttachmentBytes &&
+        !recipientIncludesSender
     }
 
     private var selectedAccount: GmailAccount? {
@@ -101,6 +108,36 @@ struct ComposerView: View {
 
     private var attachmentSizeText: String {
         ByteCountFormatter.string(fromByteCount: Int64(attachmentBytes), countStyle: .file)
+    }
+
+    private var effectiveSendingAccount: GmailAccount? {
+        selectedAccount ?? accounts.first
+    }
+
+    private var recipientIncludesSender: Bool {
+        guard let sender = effectiveSendingAccount?.email.lowercased() else { return false }
+        return allRecipientEmails.contains(sender)
+    }
+
+    private var allRecipientEmails: Set<String> {
+        Set(
+            [to, cc, bcc]
+                .flatMap { value in
+                    value.components(separatedBy: CharacterSet(charactersIn: ",;"))
+                }
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+                .filter { $0.contains("@") }
+        )
+    }
+
+    private var validationMessage: String? {
+        if recipientIncludesSender {
+            return "Choose a different sender account or remove that same address from the recipients."
+        }
+        if attachmentBytes > maxAttachmentBytes {
+            return "Gmail allows up to 25 MB total attachments."
+        }
+        return nil
     }
 
     private var currentRecipientQuery: String {
@@ -179,7 +216,8 @@ struct ComposerView: View {
                 .keyboardShortcut(.cancelAction)
             }
             .padding(.horizontal, 16)
-            .padding(.vertical, 13)
+            .padding(.top, 8)
+            .padding(.bottom, 10)
             .background(Theme.Palette.surfaceElevated)
             .overlay(
                 Rectangle()
@@ -218,7 +256,7 @@ struct ComposerView: View {
                         .font(Theme.Typography.mono(10, weight: .heavy))
                         .tracking(1.8)
                         .foregroundStyle(Theme.Palette.textTertiary)
-                        .frame(width: 54, alignment: .leading)
+                        .frame(width: fieldLabelWidth, alignment: .leading)
 
                     TextField("Subject line", text: $subject)
                         .textFieldStyle(.plain)
@@ -244,8 +282,8 @@ struct ComposerView: View {
                         .padding(.bottom, 10)
                 }
 
-                if let errorMessage {
-                    Text(errorMessage)
+                if let message = errorMessage ?? validationMessage {
+                    Text(message)
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(Theme.Palette.warm)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -257,7 +295,7 @@ struct ComposerView: View {
 
                 HStack(spacing: 10) {
                     ComposerToolButton(systemName: "textformat") { focusedField = .body }
-                    ComposerToolButton(systemName: "paperclip") { isShowingFileImporter = true }
+                    attachmentPickerControl
                     ComposerToolButton(systemName: "clock") {
                         scheduledSendDate = defaultScheduledDate()
                         isShowingSendLaterSheet = true
@@ -312,6 +350,16 @@ struct ComposerView: View {
         ) { result in
             handleFileImport(result)
         }
+        #if os(iOS)
+        .onChange(of: selectedPhotoItems) {
+            let items = selectedPhotoItems
+            guard !items.isEmpty else { return }
+            Task {
+                await handlePhotoSelection(items)
+                selectedPhotoItems = []
+            }
+        }
+        #endif
         .sheet(isPresented: $isShowingSendLaterSheet) {
             SendLaterSheet(
                 scheduledDate: $scheduledSendDate,
@@ -359,6 +407,44 @@ struct ComposerView: View {
         return min(height, 560)
     }
 
+    private var fieldLabelWidth: CGFloat {
+        #if os(iOS)
+        return 68
+        #else
+        return 72
+        #endif
+    }
+
+    @ViewBuilder
+    private var attachmentPickerControl: some View {
+        #if os(iOS)
+        Menu {
+            Button {
+                isShowingFileImporter = true
+            } label: {
+                Label("Files", systemImage: "folder")
+            }
+
+            PhotosPicker(
+                selection: $selectedPhotoItems,
+                maxSelectionCount: 10,
+                matching: .any(of: [.images, .videos])
+            ) {
+                Label("Photo Library", systemImage: "photo.on.rectangle")
+            }
+        } label: {
+            Image(systemName: "paperclip")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(Theme.Palette.textSecondary)
+                .frame(width: 30, height: 30)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        #else
+        ComposerToolButton(systemName: "paperclip") { isShowingFileImporter = true }
+        #endif
+    }
+
     private func recipientRow(
         _ label: String,
         text: Binding<String>,
@@ -370,7 +456,7 @@ struct ComposerView: View {
                 .font(Theme.Typography.mono(10, weight: .heavy))
                 .tracking(1.8)
                 .foregroundStyle(Theme.Palette.textTertiary)
-                .frame(width: 54, alignment: .leading)
+                .frame(width: fieldLabelWidth, alignment: .leading)
 
             TextField("name@example.com", text: text)
                 .textFieldStyle(.plain)
@@ -864,6 +950,26 @@ struct ComposerView: View {
         }
     }
 
+    #if os(iOS)
+    private func handlePhotoSelection(_ items: [PhotosPickerItem]) async {
+        for item in items {
+            do {
+                guard let data = try await item.loadTransferable(type: Data.self) else { continue }
+                let contentType = item.supportedContentTypes.first ?? .data
+                let fileExtension = contentType.preferredFilenameExtension ?? "dat"
+                let mimeType = contentType.preferredMIMEType ?? "application/octet-stream"
+                addAttachment(
+                    name: "Photo-\(UUID().uuidString.prefix(8)).\(fileExtension)",
+                    mimeType: mimeType,
+                    data: data
+                )
+            } catch {
+                errorMessage = "Could not attach photo."
+            }
+        }
+    }
+    #endif
+
     private func addAttachment(from url: URL) {
         let canAccess = url.startAccessingSecurityScopedResource()
         defer {
@@ -874,23 +980,31 @@ struct ComposerView: View {
 
         do {
             let data = try Data(contentsOf: url)
-            guard attachmentBytes + data.count <= maxAttachmentBytes else {
-                errorMessage = "Gmail allows up to 25 MB total attachments."
-                return
-            }
-
             let resourceValues = try? url.resourceValues(forKeys: [.contentTypeKey])
-            attachments.append(
-                ComposerAttachment(
-                    name: url.lastPathComponent,
-                    mimeType: resourceValues?.contentType?.preferredMIMEType ?? "application/octet-stream",
-                    data: data
-                )
+            addAttachment(
+                name: url.lastPathComponent,
+                mimeType: resourceValues?.contentType?.preferredMIMEType ?? "application/octet-stream",
+                data: data
             )
-            errorMessage = nil
         } catch {
             errorMessage = "Could not attach file."
         }
+    }
+
+    private func addAttachment(name: String, mimeType: String, data: Data) {
+        guard attachmentBytes + data.count <= maxAttachmentBytes else {
+            errorMessage = "Gmail allows up to 25 MB total attachments."
+            return
+        }
+
+        attachments.append(
+            ComposerAttachment(
+                name: name,
+                mimeType: mimeType,
+                data: data
+            )
+        )
+        errorMessage = nil
     }
 }
 

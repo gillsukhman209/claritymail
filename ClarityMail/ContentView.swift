@@ -9,17 +9,22 @@ import SwiftUI
 
 struct ContentView: View {
     @StateObject private var session = SessionStore()
+    @State private var hasCheckedAuth = false
 
     var body: some View {
         Group {
             if session.isSignedIn {
                 MailboxView(session: session)
-            } else {
+            } else if hasCheckedAuth {
                 LoginView(session: session)
+            } else {
+                Theme.Palette.background
+                    .ignoresSafeArea()
             }
         }
         .task {
             await session.refreshAuthStatus()
+            hasCheckedAuth = true
         }
     }
 }

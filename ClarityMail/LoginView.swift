@@ -161,15 +161,7 @@ struct LoginView: View {
 
                 Spacer()
 
-                Button {
-                    session.usePreviewSession()
-                } label: {
-                    Text("Preview inbox →".uppercased())
-                        .font(Theme.Typography.mono(10, weight: .heavy))
-                        .tracking(1.6)
-                        .foregroundStyle(Theme.Palette.textTertiary)
-                }
-                .buttonStyle(.plain)
+                Spacer(minLength: 0)
             }
         }
     }

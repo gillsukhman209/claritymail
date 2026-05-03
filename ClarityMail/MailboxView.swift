@@ -39,8 +39,11 @@ struct MailboxView: View {
     @State private var hasLoadedInitialEmails = false
     @State private var recipientSuggestions: [EmailContact] = []
     @State private var mailboxRequestID = UUID()
+    @State private var mailboxCache: [MailboxCacheKey: EmailPage] = [:]
+    @State private var hasPrefetchedMailboxes = false
 
     private let apiClient = APIClient()
+    private let cacheLimit = 50
 
     var body: some View {
         NavigationStack {
@@ -189,18 +192,24 @@ struct MailboxView: View {
             }
             .task {
                 await NotificationManager.shared.requestAuthorization()
-                await loadAccounts()
-                await processDueScheduledEmails()
-                await loadEmails()
-                await refreshSyncStatus()
-                await startRealtimeSync()
+                restoreCachedMailbox(for: currentCacheKey)
+                async let accountsTask: Void = loadAccounts()
+                async let emailsTask: Void = loadEmails(notifyForNewEmails: false)
+                _ = await (accountsTask, emailsTask)
+
+                Task {
+                    await processDueScheduledEmails()
+                    await refreshSyncStatus()
+                    await startRealtimeSync()
+                    await prefetchCommonMailboxes()
+                }
                 startAutoRefresh()
                 startMorningBriefPolling()
                 openPendingMorningBriefIfNeeded()
                 openPendingNotificationEmailIfNeeded()
             }
             .onChange(of: selectedAccountId) {
-                resetMailboxState()
+                switchMailboxContext()
                 let requestID = mailboxRequestID
                 Task {
                     await loadEmails(requestID: requestID)
@@ -208,14 +217,14 @@ struct MailboxView: View {
                 }
             }
             .onChange(of: selectedFolder) {
-                resetMailboxState()
+                switchMailboxContext()
                 let requestID = mailboxRequestID
                 Task {
                     await loadEmails(requestID: requestID)
                 }
             }
             .onChange(of: isPriorityMode) {
-                resetMailboxState()
+                switchMailboxContext()
                 let requestID = mailboxRequestID
                 Task {
                     await loadEmails(requestID: requestID)
@@ -569,6 +578,58 @@ struct MailboxView: View {
         }
     }
 
+    private func switchMailboxContext() {
+        resetMailboxState()
+        restoreCachedMailbox(for: currentCacheKey)
+    }
+
+    private var currentCacheKey: MailboxCacheKey {
+        MailboxCacheKey(
+            accountId: selectedAccountId,
+            folder: selectedFolder,
+            priorityOnly: isPriorityMode,
+            searchQuery: searchText
+        )
+    }
+
+    private func restoreCachedMailbox(for key: MailboxCacheKey) {
+        guard let page = mailboxCache[key] ?? persistedMailboxPage(for: key) else { return }
+        emails = sortMailboxEmails(page.emails)
+        nextPageToken = page.nextPageToken
+        knownEmailIds = Set(page.emails.map(\.id))
+        hasLoadedInitialEmails = true
+        mergeRecipientSuggestions(from: page.emails)
+    }
+
+    private func cacheMailboxPage(_ page: EmailPage, for key: MailboxCacheKey) {
+        let limitedPage = EmailPage(
+            emails: Array(sortMailboxEmails(page.emails).prefix(cacheLimit)),
+            nextPageToken: page.nextPageToken
+        )
+        mailboxCache[key] = limitedPage
+
+        guard key.isPersistable else { return }
+        do {
+            let data = try JSONEncoder().encode(limitedPage)
+            UserDefaults.standard.set(data, forKey: key.persistedStorageKey)
+        } catch {
+            // Cache writes are best effort only.
+        }
+    }
+
+    private func persistedMailboxPage(for key: MailboxCacheKey) -> EmailPage? {
+        guard key.isPersistable,
+              let data = UserDefaults.standard.data(forKey: key.persistedStorageKey)
+        else { return nil }
+
+        do {
+            return try JSONDecoder().decode(EmailPage.self, from: data)
+        } catch {
+            UserDefaults.standard.removeObject(forKey: key.persistedStorageKey)
+            return nil
+        }
+    }
+
     private func loadAccounts() async {
         do {
             accounts = try await apiClient.accounts()
@@ -584,6 +645,10 @@ struct MailboxView: View {
 
     private func loadEmails(notifyForNewEmails: Bool = true, requestID: UUID? = nil) async {
         let activeRequestID = requestID ?? mailboxRequestID
+        let cacheKey = currentCacheKey
+        if emails.isEmpty {
+            restoreCachedMailbox(for: cacheKey)
+        }
         isLoading = true
         defer {
             if activeRequestID == mailboxRequestID {
@@ -621,6 +686,7 @@ struct MailboxView: View {
 
             emails = fetchedEmails
             nextPageToken = page.nextPageToken
+            cacheMailboxPage(page, for: cacheKey)
             knownEmailIds = fetchedIds
             updateNotificationWatermark(with: fetchedEmails)
             await updateBadgeCount()
@@ -660,6 +726,7 @@ struct MailboxView: View {
             })
             emails = sortMailboxEmails(emails)
             self.nextPageToken = page.nextPageToken
+            cacheMailboxPage(EmailPage(emails: emails, nextPageToken: page.nextPageToken), for: currentCacheKey)
             knownEmailIds.formUnion(page.emails.map(\.id))
             errorMessage = nil
         } catch {
@@ -864,6 +931,46 @@ struct MailboxView: View {
                 return $0.isManualPrioritySender
             }
             return $0.receivedAt > $1.receivedAt
+        }
+    }
+
+    private func prefetchCommonMailboxes() async {
+        guard !hasPrefetchedMailboxes,
+              selectedAccountId == nil,
+              searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return }
+
+        hasPrefetchedMailboxes = true
+        let targets: [(MailboxFolder, Bool)] = [
+            (.sent, false),
+            (.drafts, false),
+            (.archive, false),
+            (.trash, false),
+            (.inbox, true)
+        ]
+
+        for (folder, priorityOnly) in targets {
+            if Task.isCancelled { return }
+            let key = MailboxCacheKey(
+                accountId: nil,
+                folder: folder,
+                priorityOnly: priorityOnly,
+                searchQuery: ""
+            )
+            if mailboxCache[key] != nil || persistedMailboxPage(for: key) != nil { continue }
+
+            do {
+                let page = try await apiClient.emails(
+                    accountId: nil,
+                    searchQuery: nil,
+                    folder: folder,
+                    priorityOnly: priorityOnly
+                )
+                cacheMailboxPage(page, for: key)
+                mergeRecipientSuggestions(from: page.emails)
+            } catch {
+                // Prefetch should never block foreground mailbox use.
+            }
         }
     }
 
@@ -1538,6 +1645,33 @@ private extension View {
         #else
         self.frame(minWidth: minWidth, minHeight: minHeight)
         #endif
+    }
+}
+
+private struct MailboxCacheKey: Hashable {
+    let accountId: String?
+    let folder: MailboxFolder
+    let priorityOnly: Bool
+    let searchQuery: String
+
+    init(accountId: String?, folder: MailboxFolder, priorityOnly: Bool, searchQuery: String) {
+        self.accountId = accountId
+        self.folder = folder
+        self.priorityOnly = priorityOnly
+        self.searchQuery = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    var isPersistable: Bool {
+        searchQuery.isEmpty
+    }
+
+    var persistedStorageKey: String {
+        [
+            "mailbox-cache-v1",
+            accountId ?? "all",
+            folder.rawValue,
+            priorityOnly ? "priority" : "normal"
+        ].joined(separator: "|")
     }
 }
 

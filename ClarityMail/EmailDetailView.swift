@@ -9,6 +9,9 @@ import SwiftUI
 #if canImport(AppKit)
 import AppKit
 #endif
+#if os(iOS)
+import QuickLook
+#endif
 
 struct EmailDetailView: View {
     let email: Email
@@ -30,6 +33,9 @@ struct EmailDetailView: View {
     @State private var errorMessage: String?
     @State private var attachmentData: [String: Data] = [:]
     @State private var loadingAttachmentIds = Set<String>()
+    #if os(iOS)
+    @State private var attachmentPreviewItem: AttachmentPreviewItem?
+    #endif
 
     private let apiClient = APIClient()
 
@@ -166,6 +172,12 @@ struct EmailDetailView: View {
             await loadEmail()
             await loadSummary()
         }
+        #if os(iOS)
+        .sheet(item: $attachmentPreviewItem) { item in
+            QuickLookAttachmentPreview(url: item.url)
+                .ignoresSafeArea()
+        }
+        #endif
         .tint(Theme.Palette.accent)
     }
 
@@ -186,7 +198,7 @@ struct EmailDetailView: View {
     }
 
     private var actionBar: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 14) {
             Button {
                 #if os(iOS)
                 dismiss()
@@ -218,8 +230,10 @@ struct EmailDetailView: View {
 
             Button { isShowingForward = true } label: {
                 Image(systemName: "arrowshape.turn.up.right")
+                    .frame(width: 34, height: 34)
+                    .contentShape(Rectangle())
             }
-            .buttonStyle(AuroraIconButtonStyle(size: 30))
+            .buttonStyle(AuroraIconButtonStyle(size: 34))
             .disabled(isPerformingAction)
             .keyboardShortcut("f", modifiers: [.command, .shift])
 
@@ -278,10 +292,12 @@ struct EmailDetailView: View {
                 }
             } label: {
                 Image(systemName: "ellipsis")
+                    .frame(width: 38, height: 34)
+                    .contentShape(Rectangle())
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
-            .frame(width: 30, height: 30)
+            .frame(width: 42, height: 36)
             .overlay(
                 RoundedRectangle(cornerRadius: Theme.Radius.button, style: .continuous)
                     .strokeBorder(Theme.Palette.border, lineWidth: 1)
@@ -519,6 +535,8 @@ struct EmailDetailView: View {
 
             #if canImport(AppKit)
             NSWorkspace.shared.open(fileURL)
+            #elseif os(iOS)
+            attachmentPreviewItem = AttachmentPreviewItem(url: fileURL)
             #endif
         } catch {
             errorMessage = "Could not open attachment."
@@ -848,6 +866,9 @@ private struct AttachmentPreview: View {
             .frame(maxWidth: .infinity)
             .frame(maxHeight: 360)
             .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous))
+            .onTapGesture {
+                onOpen()
+            }
         #endif
     }
 
@@ -861,6 +882,48 @@ private struct AttachmentPreview: View {
         #endif
     }
 }
+
+#if os(iOS)
+private struct AttachmentPreviewItem: Identifiable {
+    let id = UUID()
+    let url: URL
+}
+
+private struct QuickLookAttachmentPreview: UIViewControllerRepresentable {
+    let url: URL
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(url: url)
+    }
+
+    func makeUIViewController(context: Context) -> QLPreviewController {
+        let controller = QLPreviewController()
+        controller.dataSource = context.coordinator
+        return controller
+    }
+
+    func updateUIViewController(_ controller: QLPreviewController, context: Context) {
+        context.coordinator.url = url
+        controller.reloadData()
+    }
+
+    final class Coordinator: NSObject, QLPreviewControllerDataSource {
+        var url: URL
+
+        init(url: URL) {
+            self.url = url
+        }
+
+        func numberOfPreviewItems(in controller: QLPreviewController) -> Int {
+            1
+        }
+
+        func previewController(_ controller: QLPreviewController, previewItemAt index: Int) -> QLPreviewItem {
+            url as NSURL
+        }
+    }
+}
+#endif
 
 private struct ThreadMessageView: View {
     let email: Email

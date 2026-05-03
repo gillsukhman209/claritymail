@@ -695,7 +695,7 @@ struct SyncStatus: Decodable {
     let checkedAt: String
 }
 
-struct EmailPage {
+struct EmailPage: Codable {
     let emails: [Email]
     let nextPageToken: String?
 }
