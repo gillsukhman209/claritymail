@@ -22,5 +22,9 @@ struct ClarityMailApp: App {
             ContentView()
                 .appearancePreference()
         }
+        #if os(macOS)
+        .defaultSize(width: 1280, height: 860)
+        .restorationBehavior(.disabled)
+        #endif
     }
 }

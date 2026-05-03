@@ -976,7 +976,7 @@ private extension View {
         #else
         self
             .frame(minWidth: 320, maxWidth: 540)
-            .frame(height: height)
+            .frame(height: height, alignment: .top)
         #endif
     }
 
