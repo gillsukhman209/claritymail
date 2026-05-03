@@ -46,7 +46,8 @@ struct ComposerView: View {
     @State private var attachments: [ComposerAttachment] = []
     @State private var isShowingFileImporter = false
     #if os(iOS)
-    @State private var selectedPhotoItems: [PhotosPickerItem] = []
+    @State private var isShowingAttachmentOptions = false
+    @State private var isShowingPhotoPicker = false
     #endif
     @State private var isShowingSendLaterSheet = false
     @State private var scheduledSendDate = Date().addingTimeInterval(3600)
@@ -93,8 +94,7 @@ struct ComposerView: View {
         !isSending &&
         !cleanedRecipients(to).isEmpty &&
         (!messageBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || forwardedHTMLBody != nil) &&
-        attachmentBytes <= maxAttachmentBytes &&
-        !recipientIncludesSender
+        attachmentBytes <= maxAttachmentBytes
     }
 
     private var selectedAccount: GmailAccount? {
@@ -110,30 +110,7 @@ struct ComposerView: View {
         ByteCountFormatter.string(fromByteCount: Int64(attachmentBytes), countStyle: .file)
     }
 
-    private var effectiveSendingAccount: GmailAccount? {
-        selectedAccount ?? accounts.first
-    }
-
-    private var recipientIncludesSender: Bool {
-        guard let sender = effectiveSendingAccount?.email.lowercased() else { return false }
-        return allRecipientEmails.contains(sender)
-    }
-
-    private var allRecipientEmails: Set<String> {
-        Set(
-            [to, cc, bcc]
-                .flatMap { value in
-                    value.components(separatedBy: CharacterSet(charactersIn: ",;"))
-                }
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
-                .filter { $0.contains("@") }
-        )
-    }
-
     private var validationMessage: String? {
-        if recipientIncludesSender {
-            return "Choose a different sender account or remove that same address from the recipients."
-        }
         if attachmentBytes > maxAttachmentBytes {
             return "Gmail allows up to 25 MB total attachments."
         }
@@ -216,8 +193,9 @@ struct ComposerView: View {
                 .keyboardShortcut(.cancelAction)
             }
             .padding(.horizontal, 16)
-            .padding(.top, 8)
-            .padding(.bottom, 10)
+            .padding(.top, 0)
+            .padding(.bottom, 0)
+            .frame(height: 46)
             .background(Theme.Palette.surfaceElevated)
             .overlay(
                 Rectangle()
@@ -351,12 +329,26 @@ struct ComposerView: View {
             handleFileImport(result)
         }
         #if os(iOS)
-        .onChange(of: selectedPhotoItems) {
-            let items = selectedPhotoItems
-            guard !items.isEmpty else { return }
-            Task {
-                await handlePhotoSelection(items)
-                selectedPhotoItems = []
+        .confirmationDialog("Add Attachment", isPresented: $isShowingAttachmentOptions, titleVisibility: .visible) {
+            Button("Photo Library") {
+                isShowingPhotoPicker = true
+            }
+
+            Button("Files") {
+                isShowingFileImporter = true
+            }
+
+            Button("Cancel", role: .cancel) {}
+        }
+        .sheet(isPresented: $isShowingPhotoPicker) {
+            PhotoAttachmentPicker(maxSelectionCount: 10) { pickedAttachments in
+                for attachment in pickedAttachments {
+                    addAttachment(
+                        name: attachment.name,
+                        mimeType: attachment.mimeType,
+                        data: attachment.data
+                    )
+                }
             }
         }
         #endif
@@ -418,28 +410,7 @@ struct ComposerView: View {
     @ViewBuilder
     private var attachmentPickerControl: some View {
         #if os(iOS)
-        Menu {
-            Button {
-                isShowingFileImporter = true
-            } label: {
-                Label("Files", systemImage: "folder")
-            }
-
-            PhotosPicker(
-                selection: $selectedPhotoItems,
-                maxSelectionCount: 10,
-                matching: .any(of: [.images, .videos])
-            ) {
-                Label("Photo Library", systemImage: "photo.on.rectangle")
-            }
-        } label: {
-            Image(systemName: "paperclip")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(Theme.Palette.textSecondary)
-                .frame(width: 30, height: 30)
-        }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
+        ComposerToolButton(systemName: "paperclip") { isShowingAttachmentOptions = true }
         #else
         ComposerToolButton(systemName: "paperclip") { isShowingFileImporter = true }
         #endif
@@ -950,26 +921,6 @@ struct ComposerView: View {
         }
     }
 
-    #if os(iOS)
-    private func handlePhotoSelection(_ items: [PhotosPickerItem]) async {
-        for item in items {
-            do {
-                guard let data = try await item.loadTransferable(type: Data.self) else { continue }
-                let contentType = item.supportedContentTypes.first ?? .data
-                let fileExtension = contentType.preferredFilenameExtension ?? "dat"
-                let mimeType = contentType.preferredMIMEType ?? "application/octet-stream"
-                addAttachment(
-                    name: "Photo-\(UUID().uuidString.prefix(8)).\(fileExtension)",
-                    mimeType: mimeType,
-                    data: data
-                )
-            } catch {
-                errorMessage = "Could not attach photo."
-            }
-        }
-    }
-    #endif
-
     private func addAttachment(from url: URL) {
         let canAccess = url.startAccessingSecurityScopedResource()
         defer {
@@ -1225,6 +1176,94 @@ private struct SendLaterSheet: View {
         return calendar.date(bySettingHour: 9, minute: 0, second: 0, of: tomorrow)
     }
 }
+
+#if os(iOS)
+private struct PickedPhotoAttachment {
+    let name: String
+    let mimeType: String
+    let data: Data
+}
+
+private struct PhotoAttachmentPicker: UIViewControllerRepresentable {
+    let maxSelectionCount: Int
+    let onPick: ([PickedPhotoAttachment]) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    func makeUIViewController(context: Context) -> PHPickerViewController {
+        var configuration = PHPickerConfiguration(photoLibrary: .shared())
+        configuration.filter = .any(of: [.images, .videos])
+        configuration.selectionLimit = maxSelectionCount
+        configuration.preferredAssetRepresentationMode = .current
+
+        let picker = PHPickerViewController(configuration: configuration)
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: PHPickerViewController, context: Context) {}
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onPick: onPick, dismiss: dismiss)
+    }
+
+    final class Coordinator: NSObject, PHPickerViewControllerDelegate {
+        private let onPick: ([PickedPhotoAttachment]) -> Void
+        private let dismiss: DismissAction
+        private let resultQueue = DispatchQueue(label: "claritymail.photo-picker-results")
+
+        init(onPick: @escaping ([PickedPhotoAttachment]) -> Void, dismiss: DismissAction) {
+            self.onPick = onPick
+            self.dismiss = dismiss
+        }
+
+        func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
+            dismiss()
+            guard !results.isEmpty else { return }
+
+            let group = DispatchGroup()
+            var picked: [PickedPhotoAttachment] = []
+
+            for result in results {
+                guard let identifier = preferredTypeIdentifier(from: result.itemProvider) else { continue }
+                group.enter()
+                result.itemProvider.loadDataRepresentation(forTypeIdentifier: identifier) { data, _ in
+                    defer { group.leave() }
+                    guard let data else { return }
+
+                    let type = UTType(identifier) ?? .data
+                    let fileExtension = type.preferredFilenameExtension ?? "dat"
+                    let mimeType = type.preferredMIMEType ?? "application/octet-stream"
+                    let baseName = result.itemProvider.suggestedName?.replacingOccurrences(of: ".", with: "-")
+                        ?? "Photo-\(UUID().uuidString.prefix(8))"
+                    let attachment = PickedPhotoAttachment(
+                        name: "\(baseName).\(fileExtension)",
+                        mimeType: mimeType,
+                        data: data
+                    )
+
+                    self.resultQueue.async {
+                        picked.append(attachment)
+                    }
+                }
+            }
+
+            group.notify(queue: resultQueue) {
+                let attachments = picked
+                DispatchQueue.main.async {
+                    self.onPick(attachments)
+                }
+            }
+        }
+
+        private func preferredTypeIdentifier(from provider: NSItemProvider) -> String? {
+            provider.registeredTypeIdentifiers.first { identifier in
+                guard let type = UTType(identifier) else { return false }
+                return type.conforms(to: .image) || type.conforms(to: .movie)
+            } ?? provider.registeredTypeIdentifiers.first
+        }
+    }
+}
+#endif
 
 private struct ComposerAttachment: Identifiable {
     let id = UUID()
