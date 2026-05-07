@@ -1,0 +1,21 @@
+{
+  "name": "claritymail-launch-video",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "studio": "remotion studio src/index.ts",
+    "render": "remotion render src/index.ts ClarityMailLaunch out/claritymail-launch.mp4 --codec=h264 --pixel-format=yuv420p",
+    "still": "remotion still src/index.ts ClarityMailLaunch out/frame-24.png --frame=720"
+  },
+  "dependencies": {
+    "@remotion/cli": "^4.0.372",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "remotion": "^4.0.372"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "typescript": "^5.7.3"
+  }
+}

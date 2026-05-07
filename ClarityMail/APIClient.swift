@@ -29,7 +29,7 @@ struct APIClient {
             "/blocked-senders",
             queryItems: accountQueryItems(accountId: accountId)
         )
-        return response.blockedSenders
+        return response.blockedSenders.sortedByNewestUpdate
     }
 
     func importantSenders(accountId: String? = nil) async throws -> [ImportantSender] {
@@ -45,7 +45,7 @@ struct APIClient {
             "/muted-senders",
             queryItems: accountQueryItems(accountId: accountId)
         )
-        return response.mutedSenders
+        return response.mutedSenders.sortedByNewestUpdate
     }
 
     func markSenderImportant(id: Email.ID, accountId: String? = nil) async throws -> String {
@@ -62,6 +62,19 @@ struct APIClient {
             queryItems: accountQueryItems(accountId: accountId)
         )
         return response.senderEmail
+    }
+
+    func muteSender(senderEmail: String, accountId: String, fallbackEmailId: Email.ID? = nil) async throws -> String {
+        do {
+            let response: MutedSenderActionResponse = try await postJSONForResponse(
+                "/muted-senders",
+                body: SenderActionRequest(accountId: accountId, senderEmail: senderEmail)
+            )
+            return response.senderEmail
+        } catch {
+            guard let fallbackEmailId else { throw error }
+            return try await muteSender(id: fallbackEmailId, accountId: accountId)
+        }
     }
 
     func removeImportantSender(accountId: String, senderEmail: String) async throws {
@@ -156,6 +169,19 @@ struct APIClient {
             queryItems: accountQueryItems(accountId: accountId)
         )
         return response.senderEmail
+    }
+
+    func blockSender(senderEmail: String, accountId: String, fallbackEmailId: Email.ID? = nil) async throws -> String {
+        do {
+            let response: BlockSenderResponse = try await postJSONForResponse(
+                "/blocked-senders",
+                body: SenderActionRequest(accountId: accountId, senderEmail: senderEmail)
+            )
+            return response.senderEmail
+        } catch {
+            guard let fallbackEmailId else { throw error }
+            return try await blockSender(id: fallbackEmailId, accountId: accountId)
+        }
     }
 
     func markEmailRead(id: Email.ID, accountId: String? = nil) async throws {
@@ -378,10 +404,15 @@ struct APIClient {
         try await post("/gmail/watch", queryItems: accountQueryItems(accountId: accountId))
     }
 
-    func registerDeviceToken(token: String, platform: String, environment: String) async throws {
+    func registerDeviceToken(token: String, platform: String, environment: String, notificationSound: String) async throws {
         try await postJSON(
             "/devices/register",
-            body: DeviceTokenRequest(token: token, platform: platform, environment: environment)
+            body: DeviceTokenRequest(
+                token: token,
+                platform: platform,
+                environment: environment,
+                notificationSound: notificationSound
+            )
         )
     }
 
@@ -716,6 +747,9 @@ struct BlockedSender: Identifiable, Hashable, Decodable {
     let accountId: String
     let accountEmail: String
     let senderEmail: String
+    let createdAt: String?
+    let updatedAt: String?
+    let sortAt: Double?
 }
 
 struct ImportantSender: Identifiable, Hashable, Decodable {
@@ -732,6 +766,58 @@ struct MutedSender: Identifiable, Hashable, Decodable {
     let accountEmail: String
     let senderEmail: String
     let senderName: String
+    let createdAt: String?
+    let updatedAt: String?
+    let sortAt: Double?
+}
+
+private protocol SenderListRecord {
+    var createdAt: String? { get }
+    var updatedAt: String? { get }
+    var sortAt: Double? { get }
+}
+
+extension BlockedSender: SenderListRecord {}
+extension MutedSender: SenderListRecord {}
+
+private extension Array where Element: SenderListRecord {
+    var sortedByNewestUpdate: [Element] {
+        sorted {
+            $0.senderSortValue > $1.senderSortValue
+        }
+    }
+}
+
+private extension SenderListRecord {
+    var senderSortValue: Double {
+        if let sortAt {
+            return sortAt
+        }
+        return Self.timestampMillis(updatedAt) ?? Self.timestampMillis(createdAt) ?? 0
+    }
+
+    static func timestampMillis(_ value: String?) -> Double? {
+        guard let value else { return nil }
+        if let date = ISO8601DateFormatter.senderListFractionalFormatter.date(from: value)
+            ?? ISO8601DateFormatter.senderListFormatter.date(from: value) {
+            return date.timeIntervalSince1970 * 1000
+        }
+        return nil
+    }
+}
+
+private extension ISO8601DateFormatter {
+    static let senderListFractionalFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
+    static let senderListFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }()
 }
 
 struct EmailAttachmentUpload: Encodable {
@@ -918,6 +1004,12 @@ private struct DeviceTokenRequest: Encodable {
     let token: String
     let platform: String
     let environment: String
+    let notificationSound: String
+}
+
+private struct SenderActionRequest: Encodable {
+    let accountId: String
+    let senderEmail: String
 }
 
 private struct APIErrorResponse: Decodable {

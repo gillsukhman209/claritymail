@@ -21,6 +21,7 @@ struct EmailDetailView: View {
     let onBlockedSender: ((String) -> Void)?
     let onPrioritySenderChanged: ((String, Bool) -> Void)?
     let onMutedSenderChanged: ((String, Bool) -> Void)?
+    let onReadStateChanged: ((Email.ID, Bool) -> Void)?
     @Environment(\.dismiss) private var dismiss
     @State private var loadedEmail: Email?
     @State private var threadEmails: [Email] = []
@@ -28,6 +29,7 @@ struct EmailDetailView: View {
     @State private var isPerformingAction = false
     @State private var isShowingReply = false
     @State private var isShowingForward = false
+    @State private var isShowingDeliveryDetails = false
     @State private var summary: String?
     @State private var isLoadingSummary = false
     @State private var errorMessage: String?
@@ -35,6 +37,10 @@ struct EmailDetailView: View {
     @State private var loadingAttachmentIds = Set<String>()
     #if os(iOS)
     @State private var attachmentPreviewItem: AttachmentPreviewItem?
+    #endif
+    #if os(macOS)
+    @State private var swipeBackMonitor: Any?
+    @State private var horizontalSwipeBackDistance: CGFloat = 0
     #endif
 
     private let apiClient = APIClient()
@@ -50,25 +56,25 @@ struct EmailDetailView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     actionBar
-                        .padding(.horizontal, detailHorizontalPadding)
-                        .padding(.top, 14)
-                        .padding(.bottom, 14)
+                        .padding(.horizontal, chromeHorizontalPadding)
+                        .padding(.top, actionBarTopPadding)
+                        .padding(.bottom, 10)
 
                     Rectangle()
                         .fill(Theme.Palette.borderStrong)
                         .frame(height: 1)
 
                     headerSection
-                        .padding(.horizontal, detailHorizontalPadding)
-                        .padding(.top, 26)
-                        .padding(.bottom, 22)
+                        .padding(.horizontal, chromeHorizontalPadding)
+                        .padding(.top, headerTopPadding)
+                        .padding(.bottom, 18)
 
-                    deliveryDetailsCard
-                        .padding(.horizontal, detailHorizontalPadding)
+                    deliveryDetailsSection
+                        .padding(.horizontal, chromeHorizontalPadding)
                         .padding(.bottom, 22)
 
                     summaryCard
-                        .padding(.horizontal, detailHorizontalPadding)
+                        .padding(.horizontal, chromeHorizontalPadding)
                         .padding(.bottom, 22)
 
                     if let errorMessage {
@@ -92,7 +98,7 @@ struct EmailDetailView: View {
                     }
 
                     threadSection
-                        .padding(.horizontal, detailHorizontalPadding)
+                        .padding(.horizontal, bodyHorizontalPadding)
                         .padding(.bottom, 22)
 
                     if isLoading && loadedEmail == nil {
@@ -169,9 +175,27 @@ struct EmailDetailView: View {
             .opacity(0)
         }
         .task(id: email.id) {
-            await loadEmail()
-            await loadSummary()
+            loadedEmail = email
+            threadEmails = [email]
+            summary = nil
+            await loadInitialEmailData()
         }
+        #if os(macOS)
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 45)
+                .onEnded { value in
+                    if value.translation.width > 90 && abs(value.translation.height) < 45 {
+                        dismiss()
+                    }
+                }
+        )
+        .onAppear {
+            installSwipeBackMonitor()
+        }
+        .onDisappear {
+            removeSwipeBackMonitor()
+        }
+        #endif
         #if os(iOS)
         .sheet(item: $attachmentPreviewItem) { item in
             QuickLookAttachmentPreview(url: item.url)
@@ -183,9 +207,41 @@ struct EmailDetailView: View {
 
     private var detailHorizontalPadding: CGFloat {
         #if os(iOS)
-        return 16
+        return 12
         #else
         return 22
+        #endif
+    }
+
+    private var chromeHorizontalPadding: CGFloat {
+        #if os(iOS)
+        return 12
+        #else
+        return 22
+        #endif
+    }
+
+    private var bodyHorizontalPadding: CGFloat {
+        #if os(iOS)
+        return 0
+        #else
+        return 22
+        #endif
+    }
+
+    private var actionBarTopPadding: CGFloat {
+        #if os(iOS)
+        return 2
+        #else
+        return 14
+        #endif
+    }
+
+    private var headerTopPadding: CGFloat {
+        #if os(iOS)
+        return 12
+        #else
+        return 26
         #endif
     }
 
@@ -199,26 +255,6 @@ struct EmailDetailView: View {
 
     private var actionBar: some View {
         HStack(spacing: 14) {
-            Button {
-                #if os(iOS)
-                dismiss()
-                #endif
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "chevron.left")
-                        .font(.system(size: 11, weight: .heavy))
-                    Text("Inbox".uppercased())
-                        .font(Theme.Typography.mono(10, weight: .semibold))
-                        .tracking(1.6)
-                }
-                .foregroundStyle(Theme.Palette.textSecondary)
-            }
-            .buttonStyle(.plain)
-            #if os(macOS)
-            .opacity(0)
-            .frame(width: 0, height: 0)
-            #endif
-
             Spacer()
 
             Button { isShowingReply = true } label: {
@@ -292,12 +328,12 @@ struct EmailDetailView: View {
                 }
             } label: {
                 Image(systemName: "ellipsis")
-                    .frame(width: 38, height: 34)
+                    .frame(width: 44, height: 34)
                     .contentShape(Rectangle())
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
-            .frame(width: 42, height: 36)
+            .frame(width: 48, height: 36)
             .overlay(
                 RoundedRectangle(cornerRadius: Theme.Radius.button, style: .continuous)
                     .strokeBorder(Theme.Palette.border, lineWidth: 1)
@@ -318,10 +354,20 @@ struct EmailDetailView: View {
                 SenderLogoView(email: visibleEmail, size: 36)
 
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(visibleEmail.senderDisplayName)
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(Theme.Palette.textPrimary)
-                        .lineLimit(1)
+                    HStack(spacing: 8) {
+                        Text(visibleEmail.senderDisplayName)
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(Theme.Palette.textPrimary)
+                            .lineLimit(1)
+
+                        if visibleEmail.isBlockedSender == true {
+                            EmailRowChip(title: "Blocked", systemImage: nil, color: Theme.Palette.danger)
+                        }
+
+                        if visibleEmail.isMutedSender == true {
+                            EmailRowChip(title: "Muted", systemImage: nil, color: Theme.Palette.warm)
+                        }
+                    }
                     Text(visibleEmail.senderEmailAddress)
                         .font(Theme.Typography.mono(11))
                         .foregroundStyle(Theme.Palette.textTertiary)
@@ -340,30 +386,58 @@ struct EmailDetailView: View {
         }
     }
 
-    private var deliveryDetailsCard: some View {
+    private var deliveryDetailsSection: some View {
         VStack(alignment: .leading, spacing: 0) {
-            DeliveryDetailRow(
-                title: "From",
-                primary: visibleEmail.senderEmailAddress,
-                secondary: visibleEmail.senderDisplayName
-            )
-            .dossierDivider()
-
-            DeliveryDetailRow(
-                title: "To",
-                primary: toDisplayText,
-                secondary: receivedAccountText
-            )
-            .dossierDivider()
-
-            if let cc = visibleEmail.cc?.trimmingCharacters(in: .whitespacesAndNewlines), !cc.isEmpty {
-                DeliveryDetailRow(title: "Cc", primary: cc, secondary: nil)
-                    .dossierDivider()
+            Button {
+                withAnimation(Theme.Motion.snappy) {
+                    isShowingDeliveryDetails.toggle()
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: isShowingDeliveryDetails ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 10, weight: .heavy))
+                    Text("Message Details".uppercased())
+                        .font(Theme.Typography.mono(10, weight: .heavy))
+                        .tracking(1.8)
+                    Spacer()
+                    Text(toDisplayText)
+                        .font(Theme.Typography.mono(10, weight: .semibold))
+                        .foregroundStyle(Theme.Palette.textTertiary)
+                        .lineLimit(1)
+                }
+                .foregroundStyle(Theme.Palette.textSecondary)
+                .padding(.vertical, 10)
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
 
-            if let bcc = visibleEmail.bcc?.trimmingCharacters(in: .whitespacesAndNewlines), !bcc.isEmpty {
-                DeliveryDetailRow(title: "Bcc", primary: bcc, secondary: nil)
+            if isShowingDeliveryDetails {
+                VStack(alignment: .leading, spacing: 0) {
+                    DeliveryDetailRow(
+                        title: "From",
+                        primary: visibleEmail.senderEmailAddress,
+                        secondary: visibleEmail.senderDisplayName
+                    )
                     .dossierDivider()
+
+                    DeliveryDetailRow(
+                        title: "To",
+                        primary: toDisplayText,
+                        secondary: receivedAccountText
+                    )
+                    .dossierDivider()
+
+                    if let cc = visibleEmail.cc?.trimmingCharacters(in: .whitespacesAndNewlines), !cc.isEmpty {
+                        DeliveryDetailRow(title: "Cc", primary: cc, secondary: nil)
+                            .dossierDivider()
+                    }
+
+                    if let bcc = visibleEmail.bcc?.trimmingCharacters(in: .whitespacesAndNewlines), !bcc.isEmpty {
+                        DeliveryDetailRow(title: "Bcc", primary: bcc, secondary: nil)
+                            .dossierDivider()
+                    }
+                }
+                .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
         .overlay(alignment: .top) {
@@ -409,7 +483,27 @@ struct EmailDetailView: View {
                 }
             }
 
-            SummaryContentView(summary: summary)
+            if summary != nil || isLoadingSummary {
+                SummaryContentView(summary: summary)
+            } else {
+                Button {
+                    Task { await loadSummary() }
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "sparkles")
+                            .font(.system(size: 12, weight: .heavy))
+                        Text("Summarize this email".uppercased())
+                            .font(Theme.Typography.mono(11, weight: .heavy))
+                            .tracking(1.4)
+                    }
+                    .foregroundStyle(Theme.Palette.background)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .background(Theme.Palette.textPrimary)
+                }
+                .buttonStyle(.plain)
+                .disabled(isLoadingSummary)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 16)
@@ -444,8 +538,10 @@ struct EmailDetailView: View {
                     loadingAttachmentIds: loadingAttachmentIds,
                     onOpenAttachment: openAttachment
                 )
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func composerOverlay(mode: ComposerView.Mode, isPresented: Binding<Bool>) -> some View {
@@ -493,15 +589,23 @@ struct EmailDetailView: View {
         }
     }
 
+    private func loadInitialEmailData() async {
+        if hasRenderableBody(email) {
+            await loadThread(for: email)
+        } else {
+            await loadEmail()
+        }
+    }
+
+    private func hasRenderableBody(_ email: Email) -> Bool {
+        email.htmlBody?.isEmpty == false || email.body?.isEmpty == false
+    }
+
     private func loadThread(for email: Email) async {
         do {
             threadEmails = try await apiClient.thread(id: email.threadId, accountId: accountId)
-            for message in threadEmails {
-                await loadAttachments(for: message)
-            }
         } catch {
             threadEmails = [email]
-            await loadAttachments(for: email)
         }
     }
 
@@ -522,8 +626,34 @@ struct EmailDetailView: View {
         }
     }
 
-    private func openAttachment(_ attachment: EmailAttachment) {
-        guard let data = attachmentData[attachment.id] else { return }
+    private func openAttachment(_ attachment: EmailAttachment, in email: Email) {
+        Task {
+            await openAttachmentAsync(attachment, in: email)
+        }
+    }
+
+    private func openAttachmentAsync(_ attachment: EmailAttachment, in email: Email) async {
+        let cacheKey = attachmentCacheKey(email: email, attachment: attachment)
+        var data = attachmentData[cacheKey]
+
+        if data == nil {
+            loadingAttachmentIds.insert(cacheKey)
+            defer { loadingAttachmentIds.remove(cacheKey) }
+
+            do {
+                data = try await apiClient.emailAttachment(
+                    messageId: email.id,
+                    attachmentId: attachment.id,
+                    accountId: accountId
+                )
+                attachmentData[cacheKey] = data
+            } catch {
+                errorMessage = "Could not load attachment."
+                return
+            }
+        }
+
+        guard let data else { return }
 
         do {
             let directory = FileManager.default.temporaryDirectory
@@ -541,6 +671,10 @@ struct EmailDetailView: View {
         } catch {
             errorMessage = "Could not open attachment."
         }
+    }
+
+    private func attachmentCacheKey(email: Email, attachment: EmailAttachment) -> String {
+        "\(email.id):\(attachment.id)"
     }
 
     private func safeFilename(_ filename: String) -> String {
@@ -596,6 +730,7 @@ struct EmailDetailView: View {
     }
 
     private func toggleRead() async {
+        let nextReadState = !visibleEmail.isRead
         await performAction {
             if visibleEmail.isRead {
                 try await apiClient.markEmailUnread(id: visibleEmail.id, accountId: accountId)
@@ -610,6 +745,13 @@ struct EmailDetailView: View {
             loadedEmail = email
             loadedEmail?.isRead.toggle()
         }
+
+        if nextReadState, loadedEmail?.prioritySource == .manualSender {
+            loadedEmail?.priorityStatus = .normal
+            loadedEmail?.prioritySource = nil
+            loadedEmail?.priorityReason = nil
+        }
+        onReadStateChanged?(visibleEmail.id, nextReadState)
     }
 
     private func archive() async {
@@ -637,7 +779,12 @@ struct EmailDetailView: View {
 
         if errorMessage == nil, let blockedSenderEmail {
             onBlockedSender?(blockedSenderEmail)
-            dismiss()
+            if loadedEmail != nil {
+                loadedEmail?.isBlockedSender = true
+            } else {
+                loadedEmail = email
+                loadedEmail?.isBlockedSender = true
+            }
         }
     }
 
@@ -728,6 +875,38 @@ struct EmailDetailView: View {
             errorMessage = "Could not update email."
         }
     }
+
+    #if os(macOS)
+    private func installSwipeBackMonitor() {
+        guard swipeBackMonitor == nil else { return }
+        swipeBackMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { event in
+            let horizontal = event.scrollingDeltaX
+            let vertical = event.scrollingDeltaY
+
+            if abs(horizontal) > max(18, abs(vertical) * 1.4) {
+                horizontalSwipeBackDistance += horizontal
+                if horizontalSwipeBackDistance > 90 {
+                    horizontalSwipeBackDistance = 0
+                    dismiss()
+                }
+            }
+
+            if event.phase == .ended || event.momentumPhase == .ended {
+                horizontalSwipeBackDistance = 0
+            }
+
+            return event
+        }
+    }
+
+    private func removeSwipeBackMonitor() {
+        if let swipeBackMonitor {
+            NSEvent.removeMonitor(swipeBackMonitor)
+            self.swipeBackMonitor = nil
+        }
+        horizontalSwipeBackDistance = 0
+    }
+    #endif
 }
 
 private struct DeliveryDetailRow: View {
@@ -823,7 +1002,7 @@ private struct AttachmentPreview: View {
                 )
             }
             .buttonStyle(.plain)
-            .disabled(data == nil)
+            .disabled(isLoading)
         }
     }
 
@@ -929,7 +1108,7 @@ private struct ThreadMessageView: View {
     let email: Email
     let attachmentData: [String: Data]
     let loadingAttachmentIds: Set<String>
-    let onOpenAttachment: (EmailAttachment) -> Void
+    let onOpenAttachment: (EmailAttachment, Email) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -964,12 +1143,13 @@ private struct ThreadMessageView: View {
                     )
 
                     ForEach(attachments) { attachment in
+                        let cacheKey = "\(email.id):\(attachment.id)"
                         AttachmentPreview(
                             attachment: attachment,
-                            data: attachmentData[attachment.id],
-                            isLoading: loadingAttachmentIds.contains(attachment.id),
+                            data: attachmentData[cacheKey],
+                            isLoading: loadingAttachmentIds.contains(cacheKey),
                             onOpen: {
-                                onOpenAttachment(attachment)
+                                onOpenAttachment(attachment, email)
                             }
                         )
                     }
@@ -981,8 +1161,10 @@ private struct ThreadMessageView: View {
                 html: email.htmlBody,
                 plainText: email.body ?? email.snippet
             )
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.vertical, 4)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

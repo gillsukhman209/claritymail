@@ -10,6 +10,9 @@ import SwiftUI
 struct LoginView: View {
     @ObservedObject var session: SessionStore
     @Environment(\.openURL) private var openURL
+#if os(iOS)
+    @State private var authBrowserItem: AuthBrowserItem?
+#endif
 
     private var todayLabel: String {
         let formatter = DateFormatter()
@@ -76,8 +79,23 @@ struct LoginView: View {
         }
         .onChange(of: session.pendingAuthURL) {
             guard let url = session.pendingAuthURL else { return }
+#if os(iOS)
+            authBrowserItem = AuthBrowserItem(url: url)
+            session.pendingAuthURL = nil
+#else
             openURL(url)
+#endif
         }
+#if os(iOS)
+        .sheet(item: $authBrowserItem, onDismiss: {
+            Task {
+                await session.refreshAuthStatus()
+            }
+        }) { item in
+            AuthBrowserView(url: item.url)
+                .ignoresSafeArea()
+        }
+#endif
     }
 
     private var masthead: some View {

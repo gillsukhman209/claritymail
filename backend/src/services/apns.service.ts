@@ -81,7 +81,7 @@ function requestApnsPush(device: DeviceTokenRecord, email: PushEmail, badgeCount
         subtitle: email.subject,
         body: email.snippet
       },
-      sound: "default",
+      sound: device.notificationSound || "ClarityMailChime.wav",
       ...(typeof badgeCount === "number" ? { badge: badgeCount } : {})
     },
     route: "email",

@@ -15,6 +15,7 @@ import {
   listMutedSenderEmails,
   listMutedSenderNotificationSuppressions
 } from "../db/mutedSenders.repo.js";
+import { claimNewEmailNotification } from "../db/notifiedMessages.repo.js";
 import { getEmail, getUnreadInboxEstimate, listGmailHistory, startGmailWatch } from "../services/gmail.service.js";
 import { notifyDevicesForEmail } from "../services/apns.service.js";
 
@@ -88,7 +89,14 @@ async function notifyFreshInboxMessages(account: NonNullable<Awaited<ReturnType<
   if (notifyableEmails.length === 0) return;
 
   const badgeCount = await totalUnreadInboxCount();
-  await Promise.all(notifyableEmails.map((email) => notifyDevicesForEmail(email, badgeCount)));
+  const claimedEmails = [];
+  for (const email of notifyableEmails) {
+    if (await claimNewEmailNotification(account.id, email.id)) {
+      claimedEmails.push(email);
+    }
+  }
+
+  await Promise.all(claimedEmails.map((email) => notifyDevicesForEmail(email, badgeCount)));
 }
 
 realtimeRoutes.post("/devices/register", async (request, response, next) => {
@@ -97,18 +105,23 @@ realtimeRoutes.post("/devices/register", async (request, response, next) => {
       token?: unknown;
       platform?: unknown;
       environment?: unknown;
+      notificationSound?: unknown;
     };
 
     const token = typeof body.token === "string" ? body.token.trim() : "";
     const platform = body.platform === "macos" ? "macos" : "ios";
     const environment = body.environment === "production" ? "production" : "sandbox";
+    const notificationSound =
+      typeof body.notificationSound === "string" && body.notificationSound.endsWith(".wav")
+        ? body.notificationSound
+        : "ClarityMailChime.wav";
 
     if (!token) {
       response.status(400).json({ error: "Missing device token." });
       return;
     }
 
-    const device = await saveDeviceToken({ token, platform, environment });
+    const device = await saveDeviceToken({ token, platform, environment, notificationSound });
     response.json({ ok: true, deviceId: device.id });
   } catch (error) {
     next(error);

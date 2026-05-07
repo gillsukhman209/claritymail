@@ -17,6 +17,7 @@ struct ComposerView: View {
         case reply(Email)
         case forward(Email)
         case draft(Email)
+        case sendAgain(Email)
     }
 
     private enum FocusField {
@@ -87,6 +88,8 @@ struct ComposerView: View {
             return "Forward"
         case .draft:
             return "Draft"
+        case .sendAgain:
+            return "Send Again"
         }
     }
 
@@ -613,6 +616,15 @@ struct ComposerView: View {
             subject = email.subject == "(No subject)" ? "" : email.subject
             messageBody = email.body ?? email.snippet
             lastSavedDraftFingerprint = draftFingerprint()
+        case .sendAgain(let email):
+            selectedAccountId = selectedAccountId ?? email.accountId
+            to = email.to ?? ""
+            cc = email.cc ?? ""
+            bcc = email.bcc ?? ""
+            isShowingCcBcc = !cc.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                !bcc.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            subject = email.subject == "(No subject)" ? "" : email.subject
+            messageBody = email.body ?? email.snippet
         }
     }
 
@@ -626,6 +638,8 @@ struct ComposerView: View {
             case .forward:
                 focusedField = .to
             case .draft:
+                focusedField = to.isEmpty ? .to : .body
+            case .sendAgain:
                 focusedField = to.isEmpty ? .to : .body
             }
         }
@@ -655,7 +669,7 @@ struct ComposerView: View {
             delay: undoSendDelaySeconds,
             operation: {
                 switch mode {
-                case .compose, .forward:
+                case .compose, .forward, .sendAgain:
                     try await apiClient.sendEmail(
                         to: to,
                         cc: cc,
@@ -725,6 +739,9 @@ struct ComposerView: View {
                 }
             },
             onComplete: {
+                Task { @MainActor in
+                    AppSoundPlayer.shared.playSentMail()
+                }
                 onSent()
             },
             onError: {}
@@ -808,6 +825,12 @@ struct ComposerView: View {
     }
 
     private func composedHTMLBody() -> String? {
+        if case .sendAgain(let email) = mode,
+           let htmlBody = email.htmlBody,
+           messageBody.trimmingCharacters(in: .whitespacesAndNewlines) == (email.body ?? email.snippet).trimmingCharacters(in: .whitespacesAndNewlines) {
+            return htmlBody
+        }
+
         guard let forwardedHTMLBody else { return nil }
         let note = messageBody.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !note.isEmpty else { return forwardedHTMLBody }

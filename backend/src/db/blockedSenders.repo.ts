@@ -50,15 +50,20 @@ export async function listBlockedSenders(accountId?: string) {
     : db.collection("blockedSenders");
   const snapshot = await query.get();
 
-  return snapshot.docs.map((doc) => {
-    const data = doc.data();
-    return {
-      id: doc.id,
-      accountId: String(data.accountId ?? ""),
-      accountEmail: String(data.accountEmail ?? ""),
-      senderEmail: normalizeEmailAddress(String(data.senderEmail ?? ""))
-    };
-  });
+  return snapshot.docs
+    .map((doc) => {
+      const data = doc.data();
+      return {
+        id: doc.id,
+        accountId: String(data.accountId ?? ""),
+        accountEmail: String(data.accountEmail ?? ""),
+        senderEmail: normalizeEmailAddress(String(data.senderEmail ?? "")),
+        createdAt: timestampDate(data.createdAt),
+        updatedAt: timestampDate(data.updatedAt) ?? timestampDate(data.createdAt),
+        sortAt: timestampMillis(data.updatedAt) || timestampMillis(data.createdAt)
+      };
+    })
+    .sort((left, right) => right.sortAt - left.sortAt);
 }
 
 export async function deleteBlockedSender(input: { accountId: string; senderEmail: string }) {
@@ -74,4 +79,35 @@ export function filterBlockedEmails<T extends { sender: string }>(emails: T[], b
   }
 
   return emails.filter((email) => !blockedSenders.has(normalizeEmailAddress(email.sender)));
+}
+
+export function applyBlockedSenderState<T extends { sender: string }>(emails: T[], blockedSenders: Set<string>) {
+  return emails.map((email) => ({
+    ...email,
+    isBlockedSender: blockedSenders.has(normalizeEmailAddress(email.sender))
+  }));
+}
+
+function timestampDate(value: unknown): string | null {
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === "string") {
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+  }
+  if (value && typeof value === "object" && "toDate" in value && typeof value.toDate === "function") {
+    return value.toDate().toISOString();
+  }
+  return null;
+}
+
+function timestampMillis(value: unknown) {
+  if (value instanceof Date) return value.getTime();
+  if (typeof value === "string") {
+    const parsed = Date.parse(value);
+    return Number.isNaN(parsed) ? 0 : parsed;
+  }
+  if (value && typeof value === "object" && "toDate" in value && typeof value.toDate === "function") {
+    return value.toDate().getTime();
+  }
+  return 0;
 }

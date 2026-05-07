@@ -12,6 +12,7 @@ extension Notification.Name {
 
 final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
     static let shared = NotificationManager()
+    private static let deviceTokenKey = "registeredDeviceToken"
 
     private override init() {
         super.init()
@@ -33,12 +34,23 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
 
     func registerDeviceToken(_ deviceToken: Data) async {
         let token = deviceToken.map { String(format: "%02x", $0) }.joined()
+        UserDefaults.standard.set(token, forKey: Self.deviceTokenKey)
+        await registerDeviceTokenString(token)
+    }
+
+    func syncRegisteredDeviceSound() async {
+        guard let token = UserDefaults.standard.string(forKey: Self.deviceTokenKey), !token.isEmpty else { return }
+        await registerDeviceTokenString(token)
+    }
+
+    private func registerDeviceTokenString(_ token: String) async {
 
         do {
             try await APIClient().registerDeviceToken(
                 token: token,
                 platform: "ios",
-                environment: Self.apnsEnvironment
+                environment: Self.apnsEnvironment,
+                notificationSound: AppNotificationSound.selected.fileName
             )
         } catch {
             // Token registration will retry next app launch.
@@ -50,7 +62,7 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
         content.title = email.displayNameForNotification
         content.subtitle = email.subject
         content.body = email.snippet
-        content.sound = .default
+        content.sound = AppNotificationSound.selected.notificationSound
         content.userInfo = [
             "route": "email",
             "emailId": email.id,
@@ -70,7 +82,7 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
         let content = UNMutableNotificationContent()
         content.title = "Morning Brief"
         content.body = brief.notificationPreview
-        content.sound = .default
+        content.sound = AppNotificationSound.selected.notificationSound
         content.userInfo = [
             "route": "morningBrief",
             "briefId": brief.id

@@ -12,6 +12,7 @@ type EmailLike = {
   snippet: string;
   body?: string;
   receivedAt: string;
+  isRead?: boolean;
 };
 
 const promoTerms = [
@@ -99,7 +100,7 @@ export async function enrichEmailsWithPriority<T extends EmailLike>(
   const enriched = await Promise.all(
     emails.map(async (email) => {
       const senderEmail = normalizeEmailAddress(email.sender);
-      if (importantSenderEmails.has(senderEmail)) {
+      if (importantSenderEmails.has(senderEmail) && !email.isRead) {
         return {
           ...email,
           priorityStatus: "important",
@@ -182,7 +183,7 @@ export function applyImportantSenderPriority<T extends EmailLike>(
 ): T[] {
   return emails.map((email) => {
     const senderEmail = normalizeEmailAddress(email.sender);
-    if (!importantSenderEmails.has(senderEmail)) {
+    if (!importantSenderEmails.has(senderEmail) || email.isRead) {
       return email;
     }
 
@@ -204,8 +205,8 @@ export function sortPriorityEmails<T extends EmailLike & { priorityStatus?: stri
   });
 }
 
-function priorityScore(email: { priorityStatus?: string; prioritySource?: string }) {
+function priorityScore(email: { priorityStatus?: string; prioritySource?: string; isRead?: boolean }) {
   if (email.priorityStatus !== "important") return 0;
-  if (email.prioritySource === "manual_sender") return 3;
+  if (email.prioritySource === "manual_sender" && !email.isRead) return 3;
   return 2;
 }

@@ -1,8 +1,8 @@
 import { Router } from "express";
 import { getGoogleAccountById, getLatestGoogleAccount, listGoogleAccounts } from "../db/accounts.repo.js";
 import {
+  applyBlockedSenderState,
   deleteBlockedSender,
-  filterBlockedEmails,
   listBlockedSenderEmails,
   listBlockedSenders,
   normalizeEmailAddress,
@@ -109,13 +109,17 @@ async function addPinnedState(accountId: string, emails: any[]) {
   }));
 }
 
-function sortInboxEmails<T extends { receivedAt: string; isPinned?: boolean; prioritySource?: string }>(emails: T[]) {
+function sortInboxEmails<T extends { receivedAt: string; isPinned?: boolean; prioritySource?: string; isRead?: boolean }>(
+  emails: T[]
+) {
   return emails.sort((left, right) => {
     if (Boolean(left.isPinned) !== Boolean(right.isPinned)) {
       return left.isPinned ? -1 : 1;
     }
-    if ((left.prioritySource === "manual_sender") !== (right.prioritySource === "manual_sender")) {
-      return left.prioritySource === "manual_sender" ? -1 : 1;
+    const leftUnreadManualSender = left.prioritySource === "manual_sender" && !left.isRead;
+    const rightUnreadManualSender = right.prioritySource === "manual_sender" && !right.isRead;
+    if (leftUnreadManualSender !== rightUnreadManualSender) {
+      return leftUnreadManualSender ? -1 : 1;
     }
     return Date.parse(right.receivedAt) - Date.parse(left.receivedAt);
   });
@@ -165,11 +169,13 @@ emailRoutes.get("/emails", async (request, response, next) => {
       }
 
       const result = await listMailboxEmails(account, { query, folder, pageToken: pageState[accountId] });
-      const blockedFilteredEmails = filterBlockedEmails(result.emails, await listBlockedSenderEmails(account.id ?? accountId));
+      const blockedSenderEmails = await listBlockedSenderEmails(account.id ?? accountId);
+      const blockedAwareEmails = applyBlockedSenderState(result.emails, blockedSenderEmails);
+      const visibleEmails = blockedAwareEmails;
       const importantSenderEmails = await listImportantSenderEmails(account.id ?? accountId);
       const emailsWithPriority = priorityOnly
-        ? await enrichEmailsWithPriority(account.id ?? accountId, blockedFilteredEmails, importantSenderEmails)
-        : applyImportantSenderPriority(blockedFilteredEmails, importantSenderEmails);
+        ? await enrichEmailsWithPriority(account.id ?? accountId, visibleEmails, importantSenderEmails)
+        : applyImportantSenderPriority(visibleEmails, importantSenderEmails);
       const mutedSenderEmails = await listMutedSenderEmails(account.id ?? accountId);
       const emailsWithMutedState = applyMutedSenderState(emailsWithPriority, mutedSenderEmails);
       const emailsWithPinnedState = await addPinnedState(account.id ?? accountId, emailsWithMutedState);
@@ -187,7 +193,7 @@ emailRoutes.get("/emails", async (request, response, next) => {
     }
 
     const accounts = await listGoogleAccounts();
-    const emailGroups = await Promise.all(
+    const emailGroupResults = await Promise.allSettled(
       accounts.map(async (accountSummary) => {
         const account = await getGoogleAccountById(accountSummary.id);
         if (!account) {
@@ -195,14 +201,13 @@ emailRoutes.get("/emails", async (request, response, next) => {
         }
 
         const result = await listMailboxEmails(account, { query, folder, pageToken: pageState[accountSummary.id] });
-        const blockedFilteredEmails = filterBlockedEmails(
-          result.emails,
-          await listBlockedSenderEmails(account.id ?? accountSummary.id)
-        );
+        const blockedSenderEmails = await listBlockedSenderEmails(account.id ?? accountSummary.id);
+        const blockedAwareEmails = applyBlockedSenderState(result.emails, blockedSenderEmails);
+        const visibleEmails = blockedAwareEmails;
         const importantSenderEmails = await listImportantSenderEmails(account.id ?? accountSummary.id);
         const emailsWithPriority = priorityOnly
-          ? await enrichEmailsWithPriority(account.id ?? accountSummary.id, blockedFilteredEmails, importantSenderEmails)
-          : applyImportantSenderPriority(blockedFilteredEmails, importantSenderEmails);
+          ? await enrichEmailsWithPriority(account.id ?? accountSummary.id, visibleEmails, importantSenderEmails)
+          : applyImportantSenderPriority(visibleEmails, importantSenderEmails);
         const mutedSenderEmails = await listMutedSenderEmails(account.id ?? accountSummary.id);
         const emailsWithMutedState = applyMutedSenderState(emailsWithPriority, mutedSenderEmails);
         const emailsWithPinnedState = await addPinnedState(account.id ?? accountSummary.id, emailsWithMutedState);
@@ -216,6 +221,32 @@ emailRoutes.get("/emails", async (request, response, next) => {
         };
       })
     );
+    const emailGroups = emailGroupResults.flatMap((result, index) => {
+      if (result.status === "fulfilled") {
+        return [result.value];
+      }
+
+      const failedAccount = accounts[index];
+      console.warn("Skipping Gmail account during all-inbox load", {
+        accountId: failedAccount?.id,
+        email: failedAccount?.email,
+        error: result.reason instanceof Error ? result.reason.message : String(result.reason)
+      });
+      return [];
+    });
+    const failedAccounts = emailGroupResults.flatMap((result, index) => {
+      if (result.status === "fulfilled") return [];
+      const failedAccount = accounts[index];
+      return failedAccount ? [{ id: failedAccount.id, email: failedAccount.email }] : [];
+    });
+
+    if (emailGroups.length === 0 && failedAccounts.length > 0) {
+      response.status(502).json({
+        error: "Could not load any connected Gmail accounts.",
+        failedAccounts
+      });
+      return;
+    }
 
     const emails = (priorityOnly
       ? sortPriorityEmails(emailGroups.flatMap((group) => group.emails))
@@ -228,7 +259,8 @@ emailRoutes.get("/emails", async (request, response, next) => {
       emails,
       nextPageToken: encodePageState(
         Object.fromEntries(emailGroups.map((group) => [group.accountId, group.nextPageToken]))
-      )
+      ),
+      failedAccounts
     });
   } catch (error) {
     next(error);
@@ -262,9 +294,12 @@ emailRoutes.get("/emails/:id", async (request, response, next) => {
     const account = await requireSelectedAccount(request, response);
     if (!account) return;
 
+    const accountId = account.id ?? "";
+    const blockedSenderEmails = await listBlockedSenderEmails(accountId);
+    const mutedSenderEmails = await listMutedSenderEmails(accountId);
     const [email] = await addPinnedState(
-      account.id ?? "",
-      applyMutedSenderState([await getEmail(account, request.params.id)], await listMutedSenderEmails(account.id ?? ""))
+      accountId,
+      applyMutedSenderState(applyBlockedSenderState([await getEmail(account, request.params.id)], blockedSenderEmails), mutedSenderEmails)
     );
     response.json({ email });
   } catch (error) {
@@ -278,10 +313,13 @@ emailRoutes.get("/threads/:threadId", async (request, response, next) => {
     if (!account) return;
 
     const threadEmails = await getThread(account, request.params.threadId);
+    const accountId = account.id ?? "";
+    const blockedSenderEmails = await listBlockedSenderEmails(accountId);
+    const mutedSenderEmails = await listMutedSenderEmails(accountId);
     response.json({
       emails: await addPinnedState(
-        account.id ?? "",
-        applyMutedSenderState(threadEmails, await listMutedSenderEmails(account.id ?? ""))
+        accountId,
+        applyMutedSenderState(applyBlockedSenderState(threadEmails, blockedSenderEmails), mutedSenderEmails)
       )
     });
   } catch (error) {
@@ -621,6 +659,38 @@ emailRoutes.post("/emails/:id/block-sender", async (request, response, next) => 
   }
 });
 
+emailRoutes.post("/blocked-senders", async (request, response, next) => {
+  try {
+    const account = await requireSelectedAccount(request, response);
+    if (!account) return;
+
+    if (!account.id || !account.email) {
+      response.status(400).json({ error: "Connected Gmail account is missing account metadata." });
+      return;
+    }
+
+    const senderEmail =
+      typeof request.body?.senderEmail === "string" ? normalizeEmailAddress(request.body.senderEmail) : undefined;
+
+    if (!senderEmail) {
+      response.status(400).json({ error: "Missing senderEmail." });
+      return;
+    }
+
+    await saveBlockedSender({
+      accountId: account.id,
+      accountEmail: account.email,
+      senderEmail
+    });
+
+    await blockSenderInGmail(account, senderEmail);
+
+    response.json({ ok: true, senderEmail });
+  } catch (error) {
+    next(error);
+  }
+});
+
 emailRoutes.get("/blocked-senders", async (request, response, next) => {
   try {
     const accountId = typeof request.query.accountId === "string" ? request.query.accountId : undefined;
@@ -727,6 +797,36 @@ emailRoutes.post("/emails/:id/mute-sender", async (request, response, next) => {
       accountEmail: account.email,
       senderEmail,
       senderName: senderDisplayName(email.sender)
+    });
+
+    response.json({ ok: true, senderEmail });
+  } catch (error) {
+    next(error);
+  }
+});
+
+emailRoutes.post("/muted-senders", async (request, response, next) => {
+  try {
+    const account = await requireSelectedAccount(request, response);
+    if (!account) return;
+
+    if (!account.id || !account.email) {
+      response.status(400).json({ error: "Connected Gmail account is missing account metadata." });
+      return;
+    }
+
+    const senderEmail =
+      typeof request.body?.senderEmail === "string" ? normalizeEmailAddress(request.body.senderEmail) : undefined;
+
+    if (!senderEmail) {
+      response.status(400).json({ error: "Missing senderEmail." });
+      return;
+    }
+
+    await saveMutedSender({
+      accountId: account.id,
+      accountEmail: account.email,
+      senderEmail
     });
 
     response.json({ ok: true, senderEmail });

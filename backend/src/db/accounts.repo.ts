@@ -9,6 +9,26 @@ type GoogleProfile = {
   picture: string | null;
 };
 
+type GoogleAccount = {
+  id: string;
+  email: string;
+  refreshToken: string;
+  lastHistoryId: string | null;
+};
+
+type GoogleAccountSummary = {
+  id: string;
+  email: string;
+  provider: string;
+};
+
+const accountCacheTtlMs = 5 * 60 * 1000;
+let accountCacheUpdatedAt = 0;
+let accountSummariesCache: GoogleAccountSummary[] | null = null;
+let accountSummariesCacheIsComplete = false;
+const accountDetailsCache = new Map<string, GoogleAccount>();
+const accountEmailIndex = new Map<string, string>();
+
 function decryptAccount(docId: string, data: FirebaseFirestore.DocumentData) {
   const encryptedRefreshToken = data.encryptedRefreshToken;
 
@@ -22,6 +42,30 @@ function decryptAccount(docId: string, data: FirebaseFirestore.DocumentData) {
     refreshToken: decryptText(encryptedRefreshToken),
     lastHistoryId: typeof data.lastHistoryId === "string" ? data.lastHistoryId : null
   };
+}
+
+function isAccountCacheFresh() {
+  return accountSummariesCacheIsComplete && accountSummariesCache && Date.now() - accountCacheUpdatedAt < accountCacheTtlMs;
+}
+
+function rememberAccount(account: GoogleAccount, provider = "gmail") {
+  accountDetailsCache.set(account.id, account);
+  accountEmailIndex.set(account.email.toLowerCase(), account.id);
+
+  if (accountSummariesCacheIsComplete && accountSummariesCache) {
+    const summary = { id: account.id, email: account.email, provider };
+    accountSummariesCache = [
+      summary,
+      ...accountSummariesCache.filter((cached) => cached.id !== account.id)
+    ];
+    accountCacheUpdatedAt = Date.now();
+  }
+}
+
+function rememberSummaries(summaries: GoogleAccountSummary[]) {
+  accountSummariesCache = summaries;
+  accountSummariesCacheIsComplete = true;
+  accountCacheUpdatedAt = Date.now();
 }
 
 export async function saveGoogleAccount(profile: GoogleProfile, tokens: Credentials) {
@@ -57,14 +101,28 @@ export async function saveGoogleAccount(profile: GoogleProfile, tokens: Credenti
     { merge: true }
   );
 
-  return {
+  const summary = {
     id: accountRef.id,
     email: profile.email,
     provider: "gmail"
   };
+  accountSummariesCache = null;
+  accountSummariesCacheIsComplete = false;
+  rememberAccount({
+    id: accountRef.id,
+    email: profile.email,
+    refreshToken: tokens.refresh_token,
+    lastHistoryId: null
+  });
+
+  return summary;
 }
 
 export async function getLatestGoogleAccount() {
+  if (isAccountCacheFresh() && accountSummariesCache?.[0]) {
+    return getGoogleAccountById(accountSummariesCache[0].id);
+  }
+
   const db = getFirestore();
   const snapshot = await db
     .collection("gmailAccounts")
@@ -77,17 +135,23 @@ export async function getLatestGoogleAccount() {
     return null;
   }
 
-  return decryptAccount(doc.id, doc.data());
+  const account = decryptAccount(doc.id, doc.data());
+  rememberAccount(account);
+  return account;
 }
 
 export async function listGoogleAccounts() {
+  if (isAccountCacheFresh() && accountSummariesCache) {
+    return accountSummariesCache;
+  }
+
   const db = getFirestore();
   const snapshot = await db
     .collection("gmailAccounts")
     .orderBy("updatedAt", "desc")
     .get();
 
-  return snapshot.docs.map((doc) => {
+  const summaries = snapshot.docs.map((doc) => {
     const data = doc.data();
     return {
       id: doc.id,
@@ -95,9 +159,16 @@ export async function listGoogleAccounts() {
       provider: String(data.provider ?? "gmail")
     };
   });
+  rememberSummaries(summaries);
+  return summaries;
 }
 
 export async function getGoogleAccountById(accountId: string) {
+  const cached = accountDetailsCache.get(accountId);
+  if (cached) {
+    return cached;
+  }
+
   const db = getFirestore();
   const doc = await db.collection("gmailAccounts").doc(accountId).get();
 
@@ -105,10 +176,20 @@ export async function getGoogleAccountById(accountId: string) {
     return null;
   }
 
-  return decryptAccount(doc.id, doc.data() ?? {});
+  const account = decryptAccount(doc.id, doc.data() ?? {});
+  rememberAccount(account, String(doc.data()?.provider ?? "gmail"));
+  return account;
 }
 
 export async function getGoogleAccountByEmail(email: string) {
+  const cachedId = accountEmailIndex.get(email.toLowerCase());
+  if (cachedId) {
+    const cached = accountDetailsCache.get(cachedId);
+    if (cached) {
+      return cached;
+    }
+  }
+
   const db = getFirestore();
   const snapshot = await db
     .collection("gmailAccounts")
@@ -121,12 +202,21 @@ export async function getGoogleAccountByEmail(email: string) {
     return null;
   }
 
-  return decryptAccount(doc.id, doc.data());
+  const account = decryptAccount(doc.id, doc.data());
+  rememberAccount(account, String(doc.data().provider ?? "gmail"));
+  return account;
 }
 
 export async function deleteGoogleAccount(accountId: string) {
   const db = getFirestore();
   await db.collection("gmailAccounts").doc(accountId).delete();
+  const cached = accountDetailsCache.get(accountId);
+  if (cached) {
+  accountEmailIndex.delete(cached.email.toLowerCase());
+  }
+  accountDetailsCache.delete(accountId);
+  accountSummariesCache = accountSummariesCache?.filter((account) => account.id !== accountId) ?? null;
+  accountSummariesCacheIsComplete = Boolean(accountSummariesCache);
 }
 
 export async function updateGmailWatchState(
@@ -143,6 +233,11 @@ export async function updateGmailWatchState(
     },
     { merge: true }
   );
+
+  const cached = accountDetailsCache.get(accountId);
+  if (cached) {
+    accountDetailsCache.set(accountId, { ...cached, lastHistoryId: input.historyId });
+  }
 }
 
 export async function saveGmailSyncEvent(input: {

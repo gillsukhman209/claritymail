@@ -63,16 +63,21 @@ export async function listMutedSenders(accountId?: string): Promise<MutedSenderR
     : db.collection("mutedSenders");
   const snapshot = await query.get();
 
-  return snapshot.docs.map((doc) => {
-    const data = doc.data();
-    return {
-      id: doc.id,
-      accountId: String(data.accountId ?? ""),
-      accountEmail: String(data.accountEmail ?? ""),
-      senderEmail: normalizeEmailAddress(String(data.senderEmail ?? "")),
-      senderName: String(data.senderName ?? "")
-    };
-  });
+  return snapshot.docs
+    .map((doc) => {
+      const data = doc.data();
+      return {
+        id: doc.id,
+        accountId: String(data.accountId ?? ""),
+        accountEmail: String(data.accountEmail ?? ""),
+        senderEmail: normalizeEmailAddress(String(data.senderEmail ?? "")),
+        senderName: String(data.senderName ?? ""),
+        createdAt: timestampDate(data.createdAt),
+        updatedAt: timestampDate(data.updatedAt) ?? timestampDate(data.createdAt),
+        sortAt: timestampMillis(data.updatedAt) || timestampMillis(data.createdAt)
+      };
+    })
+    .sort((left, right) => right.sortAt - left.sortAt);
 }
 
 export async function deleteMutedSender(input: { accountId: string; senderEmail: string }) {
@@ -127,6 +132,30 @@ export function filterMutedEmails<T extends { sender: string }>(emails: T[], mut
   }
 
   return emails.filter((email) => !mutedSenders.has(normalizeEmailAddress(email.sender)));
+}
+
+function timestampDate(value: unknown): string | null {
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === "string") {
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+  }
+  if (value && typeof value === "object" && "toDate" in value && typeof value.toDate === "function") {
+    return value.toDate().toISOString();
+  }
+  return null;
+}
+
+function timestampMillis(value: unknown) {
+  if (value instanceof Date) return value.getTime();
+  if (typeof value === "string") {
+    const parsed = Date.parse(value);
+    return Number.isNaN(parsed) ? 0 : parsed;
+  }
+  if (value && typeof value === "object" && "toDate" in value && typeof value.toDate === "function") {
+    return value.toDate().getTime();
+  }
+  return 0;
 }
 
 export function filterMutedSuppressedEmails<T extends { sender: string; receivedAt: string }>(

@@ -607,23 +607,6 @@ export async function blockSenderInGmail(account: GmailAccount, senderEmail: str
       }
     });
   }
-
-  const matchingMessages = await gmail.users.messages.list({
-    userId: "me",
-    q: `from:${senderEmail}`,
-    maxResults: 100
-  });
-
-  await Promise.all(
-    (matchingMessages.data.messages ?? []).map((message) =>
-      message.id
-        ? gmail.users.messages.trash({
-            userId: "me",
-            id: message.id
-          })
-        : Promise.resolve()
-    )
-  );
 }
 
 export async function unblockSenderInGmail(account: GmailAccount, senderEmail: string) {
@@ -827,7 +810,7 @@ export async function listGmailHistory(account: GmailAccount, startHistoryId: st
   const result = await gmail.users.history.list({
     userId: "me",
     startHistoryId,
-    historyTypes: ["messageAdded", "labelAdded", "labelRemoved"]
+    historyTypes: ["messageAdded"]
   });
 
   const history = result.data.history ?? [];
@@ -836,14 +819,6 @@ export async function listGmailHistory(account: GmailAccount, startHistoryId: st
   for (const item of history) {
     for (const added of item.messagesAdded ?? []) {
       if (added.message?.id) messageIds.add(added.message.id);
-    }
-
-    for (const labelAdded of item.labelsAdded ?? []) {
-      if (labelAdded.message?.id) messageIds.add(labelAdded.message.id);
-    }
-
-    for (const labelRemoved of item.labelsRemoved ?? []) {
-      if (labelRemoved.message?.id) messageIds.add(labelRemoved.message.id);
     }
   }
 

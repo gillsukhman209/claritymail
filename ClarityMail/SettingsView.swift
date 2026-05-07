@@ -12,6 +12,7 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage("undoSendDelaySeconds") private var undoSendDelaySeconds = 10
     @AppStorage(AppearanceStorage.key) private var appearanceRaw: String = AppearancePreference.system.rawValue
+    @AppStorage(AppNotificationSound.storageKey) private var selectedNotificationSoundRaw = AppNotificationSound.chime.rawValue
     @State private var isWorking = false
     @State private var isSavingBrief = false
     @State private var isGeneratingBrief = false
@@ -30,6 +31,7 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 28) {
                     appearanceSection
                     sendingSection
+                    notificationsSection
                     morningBriefSection
                     accountsSection
 
@@ -78,7 +80,7 @@ struct SettingsView: View {
                 .font(.system(size: 28, weight: .bold, design: .serif))
                 .foregroundStyle(Theme.Palette.textPrimary)
 
-            Text("Sending behavior · Morning brief · Connected accounts".uppercased())
+            Text("Sending behavior · Notifications · Connected accounts".uppercased())
                 .font(Theme.Typography.mono(10, weight: .semibold))
                 .tracking(1.4)
                 .foregroundStyle(Theme.Palette.textTertiary)
@@ -192,6 +194,83 @@ struct SettingsView: View {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    private var selectedNotificationSound: AppNotificationSound {
+        AppNotificationSound(rawValue: selectedNotificationSoundRaw) ?? .chime
+    }
+
+    private var notificationsSection: some View {
+        SettingsCard(title: "Notifications", systemImage: "bell.badge.fill") {
+            VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("New email sound")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(Theme.Palette.textPrimary)
+                    Text("Pick a sound for new mail notifications. Sent mail uses its own confirmation sound.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.Palette.textTertiary)
+                }
+
+                VStack(spacing: 0) {
+                    ForEach(Array(AppNotificationSound.allCases.enumerated()), id: \.element.id) { index, sound in
+                        HStack(spacing: 10) {
+                            Button {
+                                withAnimation(Theme.Motion.snappy) {
+                                    selectedNotificationSoundRaw = sound.rawValue
+                                }
+                                Task { await NotificationManager.shared.syncRegisteredDeviceSound() }
+                            } label: {
+                                HStack(spacing: 10) {
+                                    Image(systemName: selectedNotificationSound == sound ? "checkmark.circle.fill" : "circle")
+                                        .font(.system(size: 14, weight: .semibold))
+                                        .foregroundStyle(selectedNotificationSound == sound ? Theme.Palette.accent : Theme.Palette.textTertiary)
+
+                                    Text(sound.title)
+                                        .font(.system(size: 13, weight: .semibold))
+                                        .foregroundStyle(Theme.Palette.textPrimary)
+
+                                    Spacer()
+                                }
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+
+                            Button {
+                                AppSoundPlayer.shared.playNewEmailPreview(sound)
+                            } label: {
+                                Image(systemName: "speaker.wave.2.fill")
+                                    .font(.system(size: 12, weight: .heavy))
+                                    .foregroundStyle(Theme.Palette.accent)
+                                    .frame(width: 30, height: 30)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Play \(sound.title)")
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                        .overlay(alignment: .bottom) {
+                            if index < AppNotificationSound.allCases.count - 1 {
+                                Rectangle()
+                                    .fill(Theme.Palette.border)
+                                    .frame(height: 0.5)
+                            }
+                        }
+                    }
+                }
+                .overlay(
+                    Rectangle()
+                        .strokeBorder(Theme.Palette.borderStrong, lineWidth: 1)
+                )
+
+                Button {
+                    AppSoundPlayer.shared.playSentMail()
+                } label: {
+                    Label("Preview Sent Sound", systemImage: "paperplane.fill")
+                }
+                .buttonStyle(SettingsActionButtonStyle(isPrimary: false))
             }
         }
     }

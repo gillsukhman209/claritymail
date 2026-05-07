@@ -9,6 +9,7 @@ export type DeviceTokenRecord = {
   token: string;
   platform: DevicePlatform;
   environment: DeviceEnvironment;
+  notificationSound: string;
 };
 
 function deviceTokenId(token: string) {
@@ -19,11 +20,13 @@ export async function saveDeviceToken(input: {
   token: string;
   platform: DevicePlatform;
   environment: DeviceEnvironment;
+  notificationSound?: string;
 }) {
   const id = deviceTokenId(input.token);
   await getFirestore().collection("deviceTokens").doc(id).set(
     {
       ...input,
+      notificationSound: input.notificationSound ?? "ClarityMailChime.wav",
       id,
       updatedAt: new Date()
     },
@@ -48,7 +51,8 @@ export async function listDeviceTokens(environment?: DeviceEnvironment): Promise
       id: String(data.id ?? doc.id),
       token: String(data.token ?? ""),
       platform,
-      environment
+      environment,
+      notificationSound: String(data.notificationSound ?? "ClarityMailChime.wav")
     };
   }).filter((record) => record.token);
 }

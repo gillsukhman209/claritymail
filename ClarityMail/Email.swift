@@ -30,6 +30,7 @@ struct Email: Identifiable, Hashable, Codable {
     var prioritySource: EmailPrioritySource? = nil
     var priorityReason: String? = nil
     var isMutedSender: Bool? = false
+    var isBlockedSender: Bool? = false
 
     var isPriority: Bool {
         priorityStatus == .important
@@ -74,8 +75,8 @@ struct Email: Identifiable, Hashable, Codable {
         let candidates = [
             "https://logo.clearbit.com/\(brandDomain)",
             "https://logo.clearbit.com/\(normalizedDomain)",
-            "https://www.google.com/s2/favicons?domain=\(brandDomain)&sz=128",
-            "https://www.google.com/s2/favicons?domain=\(normalizedDomain)&sz=128"
+            "https://www.google.com/s2/favicons?domain=\(brandDomain)&sz=256",
+            "https://www.google.com/s2/favicons?domain=\(normalizedDomain)&sz=256"
         ]
 
         return candidates.compactMap(URL.init(string:))
@@ -161,6 +162,7 @@ struct Email: Identifiable, Hashable, Codable {
         case prioritySource
         case priorityReason
         case isMutedSender
+        case isBlockedSender
     }
 }
 

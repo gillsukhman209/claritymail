@@ -27,6 +27,7 @@ struct MailboxView: View {
     @State private var isShowingSettings = false
     @State private var isShowingMorningBrief = false
     @State private var draftToEdit: Email?
+    @State private var sendAgainEmail: Email?
     @State private var nextPageToken: String?
     @State private var isLoadingMore = false
     @State private var autoRefreshTask: Task<Void, Never>?
@@ -41,6 +42,9 @@ struct MailboxView: View {
     @State private var mailboxRequestID = UUID()
     @State private var mailboxCache: [MailboxCacheKey: EmailPage] = [:]
     @State private var hasPrefetchedMailboxes = false
+#if os(iOS)
+    @State private var authBrowserItem: AuthBrowserItem?
+#endif
 
     private let apiClient = APIClient()
     private let cacheLimit = 50
@@ -163,9 +167,29 @@ struct MailboxView: View {
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                         .zIndex(20)
                     }
+
+                    if let sendAgainEmail {
+                        ComposerView(
+                            mode: .sendAgain(sendAgainEmail),
+                            accountId: selectedAccountId ?? sendAgainEmail.accountId,
+                            accounts: accounts,
+                            recipientSuggestions: recipientSuggestions,
+                            onSent: {
+                                Task { await loadEmails() }
+                            },
+                            onClose: {
+                                self.sendAgainEmail = nil
+                            }
+                        )
+                        .padding(.trailing, 24)
+                        .padding(.bottom, 24)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .zIndex(20)
+                    }
                 }
                 .animation(.easeOut(duration: 0.18), value: isShowingComposer)
                 .animation(.easeOut(duration: 0.18), value: draftToEdit)
+                .animation(.easeOut(duration: 0.18), value: sendAgainEmail)
                 #endif
             }
             .overlay(alignment: .bottom) {
@@ -181,18 +205,20 @@ struct MailboxView: View {
                     accounts: accounts,
                     recipientSuggestions: recipientSuggestions
                 ) { blockedSender in
-                    emails.removeAll {
-                        $0.senderEmailAddress.caseInsensitiveCompare(blockedSender) == .orderedSame
-                    }
+                    updateBlockedSender(senderEmail: blockedSender, isBlocked: true)
                 } onPrioritySenderChanged: { senderEmail, isImportant in
                     updatePrioritySender(senderEmail: senderEmail, isImportant: isImportant)
                 } onMutedSenderChanged: { senderEmail, isMuted in
                     updateMutedSender(senderEmail: senderEmail, isMuted: isMuted)
+                } onReadStateChanged: { id, isRead in
+                    updateEmailReadState(id: id, isRead: isRead)
                 }
             }
             .task {
                 await NotificationManager.shared.requestAuthorization()
                 restoreCachedMailbox(for: currentCacheKey)
+                openPendingMorningBriefIfNeeded()
+                openPendingNotificationEmailIfNeeded()
                 async let accountsTask: Void = loadAccounts()
                 async let emailsTask: Void = loadEmails(notifyForNewEmails: false)
                 _ = await (accountsTask, emailsTask)
@@ -205,8 +231,6 @@ struct MailboxView: View {
                 }
                 startAutoRefresh()
                 startMorningBriefPolling()
-                openPendingMorningBriefIfNeeded()
-                openPendingNotificationEmailIfNeeded()
             }
             .onChange(of: selectedAccountId) {
                 switchMailboxContext()
@@ -242,15 +266,32 @@ struct MailboxView: View {
             }
             .onChange(of: session.pendingAuthURL) {
                 guard let url = session.pendingAuthURL else { return }
+#if os(iOS)
+                authBrowserItem = AuthBrowserItem(url: url)
+                session.pendingAuthURL = nil
+#else
                 openURL(url)
+#endif
             }
+#if os(iOS)
+            .sheet(item: $authBrowserItem, onDismiss: {
+                Task {
+                    await session.refreshAuthStatus()
+                    await loadAccounts()
+                    await loadEmails(notifyForNewEmails: false)
+                }
+            }) { item in
+                AuthBrowserView(url: item.url)
+                    .ignoresSafeArea()
+            }
+#endif
             .onChange(of: scenePhase) {
                 guard scenePhase == .active else { return }
                 Task {
+                    openPendingNotificationEmailIfNeeded()
                     await processDueScheduledEmails()
                     await refreshSyncStatus()
                     await loadEmails(notifyForNewEmails: false)
-                    openPendingNotificationEmailIfNeeded()
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .openMorningBrief)) { _ in
@@ -320,6 +361,22 @@ struct MailboxView: View {
                     },
                     onClose: {
                         draftToEdit = nil
+                    }
+                )
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+            }
+            .sheet(item: $sendAgainEmail) { email in
+                ComposerView(
+                    mode: .sendAgain(email),
+                    accountId: selectedAccountId ?? email.accountId,
+                    accounts: accounts,
+                    recipientSuggestions: recipientSuggestions,
+                    onSent: {
+                        Task { await loadEmails() }
+                    },
+                    onClose: {
+                        sendAgainEmail = nil
                     }
                 )
                 .presentationDetents([.large])
@@ -431,6 +488,15 @@ struct MailboxView: View {
         .listRowBackground(Color.clear)
         .listRowInsets(EdgeInsets(top: 0, leading: Theme.Layout.gutter, bottom: 0, trailing: Theme.Layout.gutter))
         .swipeActions(edge: .leading, allowsFullSwipe: false) {
+            if selectedFolder == .sent {
+                Button {
+                    Task { await prepareSendAgain(email) }
+                } label: {
+                    Label("Send Again", systemImage: "paperplane")
+                }
+                .tint(Theme.Palette.accent)
+            }
+
             if selectedFolder != .drafts {
                 Button {
                     Task { await performSingleAction(email.isPinned == true ? .unpin : .pin, email: email) }
@@ -478,6 +544,13 @@ struct MailboxView: View {
                     systemImage: "checkmark.circle"
                 )
             }
+            if selectedFolder == .sent {
+                Button {
+                    Task { await prepareSendAgain(email) }
+                } label: {
+                    Label("Send Again", systemImage: "paperplane")
+                }
+            }
             Button {
                 Task { await performSingleAction(email.isPinned == true ? .unpin : .pin, email: email) }
             } label: {
@@ -486,6 +559,16 @@ struct MailboxView: View {
                     systemImage: email.isPinned == true ? "pin.slash" : "pin"
                 )
             }
+        }
+    }
+
+    private func prepareSendAgain(_ email: Email) async {
+        do {
+            let fullEmail = try await apiClient.email(id: email.id, accountId: email.accountId)
+            sendAgainEmail = fullEmail
+            errorMessage = nil
+        } catch {
+            errorMessage = "Could not prepare email."
         }
     }
 
@@ -538,6 +621,13 @@ struct MailboxView: View {
                         }
                         Button { Task { await performBulkAction(.unpin) } } label: {
                             Label("Unpin", systemImage: "pin.slash")
+                        }
+                        Divider()
+                        Button(role: .destructive) { Task { await performBulkAction(.blockSender) } } label: {
+                            Label("Block Senders", systemImage: "hand.raised")
+                        }
+                        Button { Task { await performBulkAction(.muteSender) } } label: {
+                            Label("Mute Senders", systemImage: "bell.slash")
                         }
                     } label: {
                         Image(systemName: isPerformingBulkAction ? "hourglass" : "ellipsis")
@@ -633,6 +723,7 @@ struct MailboxView: View {
     private func loadAccounts() async {
         do {
             accounts = try await apiClient.accounts()
+            session.refreshFromAccounts(accounts)
             if let selectedAccountId, !accounts.contains(where: { $0.id == selectedAccountId }) {
                 self.selectedAccountId = nil
             }
@@ -667,22 +758,6 @@ struct MailboxView: View {
             guard activeRequestID == mailboxRequestID else { return }
             let fetchedIds = Set(fetchedEmails.map(\.id))
             mergeRecipientSuggestions(from: fetchedEmails)
-
-            if shouldNotifyForNewEmails(notifyForNewEmails: notifyForNewEmails) {
-                let watermark = notificationWatermark()
-                let newEmails = fetchedEmails
-                    .filter { !knownEmailIds.contains($0.id) }
-                    .filter { $0.isMutedSender != true }
-                    .filter { email in
-                        guard let watermark else { return false }
-                        return email.receivedAt > watermark
-                    }
-                    .prefix(3)
-
-                for email in newEmails {
-                    await NotificationManager.shared.notifyNewEmail(email)
-                }
-            }
 
             emails = fetchedEmails
             nextPageToken = page.nextPageToken
@@ -777,9 +852,10 @@ struct MailboxView: View {
             .map { email in
                 var updated = email
                 if email.senderEmailAddress.lowercased() == normalizedSender {
-                    updated.priorityStatus = isImportant ? .important : .normal
-                    updated.prioritySource = isImportant ? .manualSender : nil
-                    updated.priorityReason = isImportant ? "Important sender" : nil
+                    let shouldPromote = isImportant && !email.isRead
+                    updated.priorityStatus = shouldPromote ? .important : .normal
+                    updated.prioritySource = shouldPromote ? .manualSender : nil
+                    updated.priorityReason = shouldPromote ? "Important sender" : nil
                 }
                 return updated
             }
@@ -811,9 +887,42 @@ struct MailboxView: View {
         }
     }
 
+    private func updateBlockedSender(senderEmail: String, isBlocked: Bool) {
+        let normalizedSender = senderEmail.lowercased()
+        emails = emails.map { email in
+            var updated = email
+            if email.senderEmailAddress.lowercased() == normalizedSender {
+                updated.isBlockedSender = isBlocked
+            }
+            return updated
+        }
+    }
+
+    private func updateEmailReadState(id: Email.ID, isRead: Bool) {
+        for index in emails.indices where emails[index].id == id {
+            emails[index].isRead = isRead
+            if isRead && emails[index].prioritySource == .manualSender {
+                emails[index].priorityStatus = .normal
+                emails[index].prioritySource = nil
+                emails[index].priorityReason = nil
+            }
+        }
+
+        if selectedEmail?.id == id {
+            selectedEmail?.isRead = isRead
+            if isRead && selectedEmail?.prioritySource == .manualSender {
+                selectedEmail?.priorityStatus = .normal
+                selectedEmail?.prioritySource = nil
+                selectedEmail?.priorityReason = nil
+            }
+        }
+
+        emails = sortMailboxEmails(emails)
+    }
+
     private func prioritySortScore(_ email: Email) -> Int {
         guard email.isPriority else { return 0 }
-        return email.isManualPrioritySender ? 3 : 2
+        return email.isManualPrioritySender && !email.isRead ? 3 : 2
     }
 
     private var selectedEmails: [Email] {
@@ -832,16 +941,22 @@ struct MailboxView: View {
     private func performBulkAction(_ action: BulkEmailAction) async {
         let targets = selectedEmails
         guard !targets.isEmpty, !isPerformingBulkAction else { return }
+        let targetIds = Set(targets.map(\.id))
+        let targetSenderEmails = Set(targets.map { $0.senderEmailAddress.lowercased() })
 
         isPerformingBulkAction = true
         defer { isPerformingBulkAction = false }
 
         do {
-            for email in targets {
-                try await perform(action, email: email)
+            if action.isSenderScopedAction {
+                try await performSenderScopedBulkAction(action, targets: targets)
+            } else {
+                for email in targets {
+                    try await perform(action, email: email)
+                }
             }
 
-            applyBulkAction(action, to: Set(targets.map(\.id)))
+            applyBulkAction(action, to: targetIds, senderEmails: targetSenderEmails)
             selectedEmailIds.removeAll()
             isSelectionMode = false
             errorMessage = nil
@@ -850,14 +965,29 @@ struct MailboxView: View {
         }
     }
 
+    private func performSenderScopedBulkAction(_ action: BulkEmailAction, targets: [Email]) async throws {
+        var representativesBySender: [String: Email] = [:]
+        for email in targets {
+            let key = "\(email.accountId ?? ""):\(email.senderEmailAddress.lowercased())"
+            if representativesBySender[key] == nil {
+                representativesBySender[key] = email
+            }
+        }
+
+        for email in representativesBySender.values {
+            try await perform(action, email: email)
+        }
+    }
+
     private func performSingleAction(_ action: BulkEmailAction, email: Email) async {
         guard !isPerformingBulkAction else { return }
         isPerformingBulkAction = true
         defer { isPerformingBulkAction = false }
+        let senderEmails = Set([email.senderEmailAddress.lowercased()])
 
         do {
             try await perform(action, email: email)
-            applyBulkAction(action, to: [email.id])
+            applyBulkAction(action, to: [email.id], senderEmails: senderEmails)
             errorMessage = nil
         } catch {
             errorMessage = "Could not update email."
@@ -886,21 +1016,48 @@ struct MailboxView: View {
             try await apiClient.pinEmail(id: email.id, accountId: email.accountId)
         case .unpin:
             try await apiClient.unpinEmail(id: email.id, accountId: email.accountId)
+        case .blockSender:
+            guard let accountId = email.accountId else {
+                _ = try await apiClient.blockSender(id: email.id, accountId: email.accountId)
+                return
+            }
+            _ = try await apiClient.blockSender(
+                senderEmail: email.senderEmailAddress,
+                accountId: accountId,
+                fallbackEmailId: email.id
+            )
+        case .muteSender:
+            guard let accountId = email.accountId else {
+                _ = try await apiClient.muteSender(id: email.id, accountId: email.accountId)
+                return
+            }
+            _ = try await apiClient.muteSender(
+                senderEmail: email.senderEmailAddress,
+                accountId: accountId,
+                fallbackEmailId: email.id
+            )
         }
     }
 
-    private func applyBulkAction(_ action: BulkEmailAction, to ids: Set<Email.ID>) {
+    private func applyBulkAction(_ action: BulkEmailAction, to ids: Set<Email.ID>, senderEmails: Set<String> = []) {
         switch action {
         case .trash, .archive:
             emails.removeAll { ids.contains($0.id) }
         case .markRead:
             for index in emails.indices where ids.contains(emails[index].id) {
                 emails[index].isRead = true
+                if emails[index].prioritySource == .manualSender {
+                    emails[index].priorityStatus = .normal
+                    emails[index].prioritySource = nil
+                    emails[index].priorityReason = nil
+                }
             }
+            emails = sortMailboxEmails(emails)
         case .markUnread:
             for index in emails.indices where ids.contains(emails[index].id) {
                 emails[index].isRead = false
             }
+            emails = sortMailboxEmails(emails)
         case .star:
             for index in emails.indices where ids.contains(emails[index].id) {
                 emails[index].isStarred = true
@@ -919,6 +1076,14 @@ struct MailboxView: View {
                 emails[index].isPinned = false
             }
             emails = sortMailboxEmails(emails)
+        case .blockSender:
+            for index in emails.indices where ids.contains(emails[index].id) || senderEmails.contains(emails[index].senderEmailAddress.lowercased()) {
+                emails[index].isBlockedSender = true
+            }
+        case .muteSender:
+            for index in emails.indices where ids.contains(emails[index].id) || senderEmails.contains(emails[index].senderEmailAddress.lowercased()) {
+                emails[index].isMutedSender = true
+            }
         }
     }
 
@@ -927,8 +1092,10 @@ struct MailboxView: View {
             if ($0.isPinned == true) != ($1.isPinned == true) {
                 return $0.isPinned == true
             }
-            if selectedFolder == .inbox && $0.isManualPrioritySender != $1.isManualPrioritySender {
-                return $0.isManualPrioritySender
+            let leftUnreadManualSender = selectedFolder == .inbox && $0.isManualPrioritySender && !$0.isRead
+            let rightUnreadManualSender = selectedFolder == .inbox && $1.isManualPrioritySender && !$1.isRead
+            if leftUnreadManualSender != rightUnreadManualSender {
+                return leftUnreadManualSender
             }
             return $0.receivedAt > $1.receivedAt
         }
@@ -1790,6 +1957,8 @@ private enum BulkEmailAction: String, CaseIterable {
     case unstar
     case pin
     case unpin
+    case blockSender
+    case muteSender
 
     var title: String {
         switch self {
@@ -1801,6 +1970,8 @@ private enum BulkEmailAction: String, CaseIterable {
         case .unstar: return "Unstar"
         case .pin: return "Pin"
         case .unpin: return "Unpin"
+        case .blockSender: return "Block"
+        case .muteSender: return "Mute"
         }
     }
 
@@ -1814,6 +1985,17 @@ private enum BulkEmailAction: String, CaseIterable {
         case .unstar: return "star.slash"
         case .pin: return "pin"
         case .unpin: return "pin.slash"
+        case .blockSender: return "hand.raised"
+        case .muteSender: return "bell.slash"
+        }
+    }
+
+    var isSenderScopedAction: Bool {
+        switch self {
+        case .blockSender, .muteSender:
+            return true
+        default:
+            return false
         }
     }
 }
@@ -1950,11 +2132,25 @@ private struct EmailRowView: View {
                     .foregroundStyle(Theme.Palette.textSecondary)
                     .lineLimit(1)
 
-                if email.isPinned == true || (email.isPriority && showPriorityLabel) {
+                if email.isPinned == true || email.isBlockedSender == true || email.isMutedSender == true || (email.isPriority && showPriorityLabel) {
                     HStack(spacing: 8) {
                         if email.isPinned == true {
                             EmailRowChip(
                                 title: "Pinned",
+                                systemImage: nil,
+                                color: Theme.Palette.warm
+                            )
+                        }
+                        if email.isBlockedSender == true {
+                            EmailRowChip(
+                                title: "Blocked Sender",
+                                systemImage: nil,
+                                color: Theme.Palette.danger
+                            )
+                        }
+                        if email.isMutedSender == true {
+                            EmailRowChip(
+                                title: "Muted Sender",
                                 systemImage: nil,
                                 color: Theme.Palette.warm
                             )
@@ -2016,12 +2212,12 @@ private struct EmailRowView: View {
 
     private var rowFill: Color {
         if isSelected { return Theme.Palette.accent.opacity(0.06) }
-        if email.isManualPrioritySender { return Theme.Palette.accent.opacity(0.04) }
+        if email.isManualPrioritySender && !email.isRead { return Theme.Palette.accent.opacity(0.04) }
         return Color.clear
     }
 }
 
-private struct EmailRowChip: View {
+struct EmailRowChip: View {
     let title: String
     let systemImage: String?
     let color: Color
@@ -2074,6 +2270,7 @@ struct SenderLogoView: View {
             if let logoImage {
                 Image(platformImage: logoImage)
                     .resizable()
+                    .interpolation(.high)
                     .scaledToFill()
             } else {
                 fallback
@@ -2115,7 +2312,8 @@ struct SenderLogoView: View {
                 guard let httpResponse = response as? HTTPURLResponse,
                       (200..<300).contains(httpResponse.statusCode),
                       data.count > 100,
-                      let image = PlatformImage(data: data) else {
+                      let image = PlatformImage(data: data),
+                      image.isLargeEnoughForSenderLogo(minPixelSize: max(56, size * 1.8)) else {
                     continue
                 }
 
@@ -2132,6 +2330,19 @@ struct SenderLogoView: View {
 import AppKit
 typealias PlatformImage = NSImage
 
+private extension NSImage {
+    func isLargeEnoughForSenderLogo(minPixelSize: CGFloat) -> Bool {
+        let bestPixelSize = representations.reduce(CGSize.zero) { current, representation in
+            let candidate = CGSize(width: representation.pixelsWide, height: representation.pixelsHigh)
+            return min(candidate.width, candidate.height) > min(current.width, current.height) ? candidate : current
+        }
+
+        let width = bestPixelSize.width > 0 ? bestPixelSize.width : size.width
+        let height = bestPixelSize.height > 0 ? bestPixelSize.height : size.height
+        return width >= minPixelSize && height >= minPixelSize
+    }
+}
+
 private extension Image {
     init(platformImage: PlatformImage) {
         self.init(nsImage: platformImage)
@@ -2140,6 +2351,12 @@ private extension Image {
 #else
 import UIKit
 typealias PlatformImage = UIImage
+
+private extension UIImage {
+    func isLargeEnoughForSenderLogo(minPixelSize: CGFloat) -> Bool {
+        size.width * scale >= minPixelSize && size.height * scale >= minPixelSize
+    }
+}
 
 private extension Image {
     init(platformImage: PlatformImage) {

@@ -22,11 +22,13 @@ struct EmailHTMLView: View {
             EmailWebView(html: wrappedHTML(html), contentHeight: $contentHeight)
                 .frame(height: max(contentHeight, 80))
                 .frame(maxWidth: .infinity)
+                #if os(macOS)
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.row, style: .continuous))
                 .overlay(
                     RoundedRectangle(cornerRadius: Theme.Radius.row, style: .continuous)
                         .strokeBorder(Theme.Palette.border, lineWidth: 1)
                 )
+                #endif
         } else {
             Text(plainText)
                 .font(.system(size: 15))
@@ -41,7 +43,13 @@ struct EmailHTMLView: View {
     /// the sender shipped (white-on-dark dark-mode tweaks, transparent text,
     /// etc.) lands on a predictable canvas.
     private func wrappedHTML(_ body: String) -> String {
-        """
+        #if os(iOS)
+        let bodyPadding = "0"
+        #else
+        let bodyPadding = "18px 18px 22px 18px"
+        #endif
+
+        return """
         <!doctype html>
         <html>
         <head>
@@ -55,7 +63,10 @@ struct EmailHTMLView: View {
             }
             html, body {
               margin: 0;
-              padding: 18px 18px 22px 18px;
+              padding: \(bodyPadding);
+              width: 100% !important;
+              max-width: 100% !important;
+              box-sizing: border-box;
               background: #FFFFFF;
               color: #1A1A1A;
               font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
@@ -63,7 +74,12 @@ struct EmailHTMLView: View {
               line-height: 1.55;
               word-wrap: break-word;
               overflow-wrap: anywhere;
+              overflow-x: hidden;
               -webkit-text-size-adjust: 100%;
+            }
+            *, *::before, *::after {
+              box-sizing: border-box;
+              max-width: 100% !important;
             }
             *:not([style*="color"]):not(font[color]) {
               color: inherit;
@@ -77,8 +93,15 @@ struct EmailHTMLView: View {
               border: 0;
             }
             table {
+              width: 100% !important;
               max-width: 100% !important;
               border-collapse: collapse;
+              table-layout: auto !important;
+            }
+            td, th {
+              max-width: 100% !important;
+              overflow-wrap: anywhere;
+              word-break: break-word;
             }
             a {
               color: #C2410C;
