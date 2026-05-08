@@ -21,6 +21,7 @@ struct EmailDetailView: View {
     let onBlockedSender: ((String) -> Void)?
     let onPrioritySenderChanged: ((String, Bool) -> Void)?
     let onMutedSenderChanged: ((String, Bool) -> Void)?
+    let onHiddenSenderChanged: ((String, Bool) -> Void)?
     let onReadStateChanged: ((Email.ID, Bool) -> Void)?
     @Environment(\.dismiss) private var dismiss
     @State private var loadedEmail: Email?
@@ -315,6 +316,16 @@ struct EmailDetailView: View {
                     }
                 }
 
+                if visibleEmail.isHiddenSender == true {
+                    Button { Task { await unhideSender() } } label: {
+                        Label("Unhide Sender", systemImage: "eye")
+                    }
+                } else {
+                    Button { Task { await hideSender() } } label: {
+                        Label("Hide Sender", systemImage: "eye.slash")
+                    }
+                }
+
                 Divider()
 
                 if visibleEmail.isManualPrioritySender {
@@ -366,6 +377,10 @@ struct EmailDetailView: View {
 
                         if visibleEmail.isMutedSender == true {
                             EmailRowChip(title: "Muted", systemImage: nil, color: Theme.Palette.warm)
+                        }
+
+                        if visibleEmail.isHiddenSender == true {
+                            EmailRowChip(title: "Hidden", systemImage: nil, color: Theme.Palette.textTertiary)
                         }
                     }
                     Text(visibleEmail.senderEmailAddress)
@@ -816,6 +831,35 @@ struct EmailDetailView: View {
         }
     }
 
+    private func hideSender() async {
+        var hiddenSenderEmail: String?
+
+        await performAction {
+            hiddenSenderEmail = try await apiClient.hideSender(id: visibleEmail.id, accountId: accountId)
+        }
+
+        if errorMessage == nil, let hiddenSenderEmail {
+            applyHiddenSenderChange(senderEmail: hiddenSenderEmail, isHidden: true)
+            dismiss()
+        }
+    }
+
+    private func unhideSender() async {
+        guard let resolvedAccountId = visibleEmail.accountId ?? accountId else {
+            errorMessage = "Could not unhide sender."
+            return
+        }
+
+        let senderEmail = visibleEmail.senderEmailAddress
+        await performAction {
+            try await apiClient.unhideSender(accountId: resolvedAccountId, senderEmail: senderEmail)
+        }
+
+        if errorMessage == nil {
+            applyHiddenSenderChange(senderEmail: senderEmail, isHidden: false)
+        }
+    }
+
     private func markImportantSender() async {
         var importantSenderEmail: String?
 
@@ -862,6 +906,15 @@ struct EmailDetailView: View {
 
         loadedEmail?.isMutedSender = isMuted
         onMutedSenderChanged?(senderEmail.lowercased(), isMuted)
+    }
+
+    private func applyHiddenSenderChange(senderEmail: String, isHidden: Bool) {
+        if loadedEmail == nil {
+            loadedEmail = email
+        }
+
+        loadedEmail?.isHiddenSender = isHidden
+        onHiddenSenderChanged?(senderEmail.lowercased(), isHidden)
     }
 
     private func performAction(_ action: () async throws -> Void) async {

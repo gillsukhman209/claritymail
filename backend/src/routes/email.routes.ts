@@ -21,6 +21,15 @@ import {
   saveImportantSender
 } from "../db/importantSenders.repo.js";
 import {
+  applyHiddenSenderState,
+  deleteHiddenSender,
+  filterHiddenEmails,
+  listHiddenSenderEmails,
+  listHiddenSenders,
+  onlyHiddenEmails,
+  saveHiddenSender
+} from "../db/hiddenSenders.repo.js";
+import {
   applyMutedSenderState,
   deleteMutedSender,
   listMutedSenderEmails,
@@ -66,7 +75,9 @@ import {
 export const emailRoutes = Router();
 
 function mailboxFolderFromQuery(value: unknown): MailboxFolder {
-  return value === "sent" || value === "archive" || value === "trash" || value === "drafts" ? value : "inbox";
+  return value === "sent" || value === "archive" || value === "trash" || value === "drafts" || value === "hidden"
+    ? value
+    : "inbox";
 }
 
 const maxAttachmentBytes = 25 * 1024 * 1024;
@@ -178,7 +189,9 @@ emailRoutes.get("/emails", async (request, response, next) => {
       await markGoogleAccountConnected(account.id ?? accountId);
       const blockedSenderEmails = await listBlockedSenderEmails(account.id ?? accountId);
       const blockedAwareEmails = applyBlockedSenderState(result.emails, blockedSenderEmails);
-      const visibleEmails = blockedAwareEmails;
+      const hiddenSenderEmails = await listHiddenSenderEmails(account.id ?? accountId);
+      const hiddenAwareEmails = applyHiddenSenderState(blockedAwareEmails, hiddenSenderEmails);
+      const visibleEmails = folder === "hidden" ? onlyHiddenEmails(hiddenAwareEmails, hiddenSenderEmails) : filterHiddenEmails(hiddenAwareEmails, hiddenSenderEmails);
       const importantSenderEmails = await listImportantSenderEmails(account.id ?? accountId);
       const emailsWithPriority = priorityOnly
         ? await enrichEmailsWithPriority(account.id ?? accountId, visibleEmails, importantSenderEmails)
@@ -211,7 +224,9 @@ emailRoutes.get("/emails", async (request, response, next) => {
         await markGoogleAccountConnected(account.id ?? accountSummary.id);
         const blockedSenderEmails = await listBlockedSenderEmails(account.id ?? accountSummary.id);
         const blockedAwareEmails = applyBlockedSenderState(result.emails, blockedSenderEmails);
-        const visibleEmails = blockedAwareEmails;
+        const hiddenSenderEmails = await listHiddenSenderEmails(account.id ?? accountSummary.id);
+        const hiddenAwareEmails = applyHiddenSenderState(blockedAwareEmails, hiddenSenderEmails);
+        const visibleEmails = folder === "hidden" ? onlyHiddenEmails(hiddenAwareEmails, hiddenSenderEmails) : filterHiddenEmails(hiddenAwareEmails, hiddenSenderEmails);
         const importantSenderEmails = await listImportantSenderEmails(account.id ?? accountSummary.id);
         const emailsWithPriority = priorityOnly
           ? await enrichEmailsWithPriority(account.id ?? accountSummary.id, visibleEmails, importantSenderEmails)
@@ -308,9 +323,13 @@ emailRoutes.get("/emails/:id", async (request, response, next) => {
     const accountId = account.id ?? "";
     const blockedSenderEmails = await listBlockedSenderEmails(accountId);
     const mutedSenderEmails = await listMutedSenderEmails(accountId);
+    const hiddenSenderEmails = await listHiddenSenderEmails(accountId);
     const [email] = await addPinnedState(
       accountId,
-      applyMutedSenderState(applyBlockedSenderState([await getEmail(account, request.params.id)], blockedSenderEmails), mutedSenderEmails)
+      applyHiddenSenderState(
+        applyMutedSenderState(applyBlockedSenderState([await getEmail(account, request.params.id)], blockedSenderEmails), mutedSenderEmails),
+        hiddenSenderEmails
+      )
     );
     response.json({ email });
   } catch (error) {
@@ -327,10 +346,14 @@ emailRoutes.get("/threads/:threadId", async (request, response, next) => {
     const accountId = account.id ?? "";
     const blockedSenderEmails = await listBlockedSenderEmails(accountId);
     const mutedSenderEmails = await listMutedSenderEmails(accountId);
+    const hiddenSenderEmails = await listHiddenSenderEmails(accountId);
     response.json({
       emails: await addPinnedState(
         accountId,
-        applyMutedSenderState(applyBlockedSenderState(threadEmails, blockedSenderEmails), mutedSenderEmails)
+        applyHiddenSenderState(
+          applyMutedSenderState(applyBlockedSenderState(threadEmails, blockedSenderEmails), mutedSenderEmails),
+          hiddenSenderEmails
+        )
       )
     });
   } catch (error) {
@@ -937,6 +960,89 @@ emailRoutes.delete("/muted-senders", async (request, response, next) => {
     }
 
     await deleteMutedSender({ accountId, senderEmail });
+    response.json({ ok: true, senderEmail });
+  } catch (error) {
+    next(error);
+  }
+});
+
+emailRoutes.post("/emails/:id/hide-sender", async (request, response, next) => {
+  try {
+    const account = await requireSelectedAccount(request, response);
+    if (!account) return;
+
+    if (!account.id || !account.email) {
+      response.status(400).json({ error: "Connected Gmail account is missing account metadata." });
+      return;
+    }
+
+    const email = await getEmail(account, request.params.id);
+    const senderEmail = normalizeEmailAddress(email.sender);
+
+    await saveHiddenSender({
+      accountId: account.id,
+      accountEmail: account.email,
+      senderEmail,
+      senderName: senderDisplayName(email.sender)
+    });
+
+    response.json({ ok: true, senderEmail });
+  } catch (error) {
+    next(error);
+  }
+});
+
+emailRoutes.post("/hidden-senders", async (request, response, next) => {
+  try {
+    const account = await requireSelectedAccount(request, response);
+    if (!account) return;
+
+    if (!account.id || !account.email) {
+      response.status(400).json({ error: "Connected Gmail account is missing account metadata." });
+      return;
+    }
+
+    const senderEmail =
+      typeof request.body?.senderEmail === "string" ? normalizeEmailAddress(request.body.senderEmail) : undefined;
+
+    if (!senderEmail) {
+      response.status(400).json({ error: "Missing senderEmail." });
+      return;
+    }
+
+    await saveHiddenSender({
+      accountId: account.id,
+      accountEmail: account.email,
+      senderEmail
+    });
+
+    response.json({ ok: true, senderEmail });
+  } catch (error) {
+    next(error);
+  }
+});
+
+emailRoutes.get("/hidden-senders", async (request, response, next) => {
+  try {
+    const accountId = typeof request.query.accountId === "string" ? request.query.accountId : undefined;
+    response.json({ hiddenSenders: await listHiddenSenders(accountId) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+emailRoutes.delete("/hidden-senders", async (request, response, next) => {
+  try {
+    const accountId = typeof request.query.accountId === "string" ? request.query.accountId : undefined;
+    const senderEmail =
+      typeof request.query.senderEmail === "string" ? normalizeEmailAddress(request.query.senderEmail) : undefined;
+
+    if (!accountId || !senderEmail) {
+      response.status(400).json({ error: "Missing accountId or senderEmail." });
+      return;
+    }
+
+    await deleteHiddenSender({ accountId, senderEmail });
     response.json({ ok: true, senderEmail });
   } catch (error) {
     next(error);

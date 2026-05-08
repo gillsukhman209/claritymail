@@ -171,25 +171,34 @@ enum Theme {
     }
 
     enum Typography {
+        private static var preference: FontPreference {
+            FontPreference.current
+        }
+
+        private static func scaled(_ size: CGFloat) -> CGFloat {
+            size * FontSizePreference.current.multiplier
+        }
+
         /// Editorial display — serif, like a masthead.
         static func display(_ size: CGFloat = 36) -> Font {
-            .system(size: size, weight: .bold, design: .serif).italic()
+            let font = Font.system(size: scaled(size), weight: .bold, design: preference.displayDesign)
+            return preference.usesItalicDisplay ? font.italic() : font
         }
         /// Section title — serif, no italic.
         static func title(_ size: CGFloat = 22) -> Font {
-            .system(size: size, weight: .semibold, design: .serif)
+            .system(size: scaled(size), weight: .semibold, design: preference.titleDesign)
         }
         /// Body — clean system sans.
         static func body(_ size: CGFloat = 14, weight: Font.Weight = .regular) -> Font {
-            .system(size: size, weight: weight)
+            .system(size: scaled(size), weight: weight, design: preference.bodyDesign)
         }
         /// Metadata — small caps mono for timestamps, counts, labels.
         static func mono(_ size: CGFloat = 11, weight: Font.Weight = .medium) -> Font {
-            .system(size: size, weight: weight, design: .monospaced)
+            .system(size: scaled(size), weight: weight, design: preference.metadataDesign)
         }
         /// Section eyebrow label — wide-tracked uppercase.
         static func eyebrow(_ size: CGFloat = 10) -> Font {
-            .system(size: size, weight: .heavy)
+            .system(size: scaled(size), weight: .heavy, design: preference.metadataDesign)
         }
     }
 
@@ -467,6 +476,139 @@ enum AppearanceStorage {
     static let key = "appearancePreference"
 }
 
+// MARK: - Font preference
+
+enum FontPreference: String, CaseIterable, Identifiable {
+    case editorial
+    case system
+    case rounded
+    case classic
+
+    var id: String { rawValue }
+
+    static var current: FontPreference {
+        FontPreference(rawValue: UserDefaults.standard.string(forKey: FontPreferenceStorage.key) ?? "") ?? .editorial
+    }
+
+    var label: String {
+        switch self {
+        case .editorial: return "Editorial"
+        case .system: return "System"
+        case .rounded: return "Rounded"
+        case .classic: return "Classic"
+        }
+    }
+
+    var description: String {
+        switch self {
+        case .editorial: return "Current ClarityMail look"
+        case .system: return "Cleaner Apple-style text"
+        case .rounded: return "Softer, friendlier text"
+        case .classic: return "Serif titles, simple labels"
+        }
+    }
+
+    var sampleTitle: String {
+        switch self {
+        case .editorial: return "Inbox"
+        case .system: return "Inbox"
+        case .rounded: return "Inbox"
+        case .classic: return "Inbox"
+        }
+    }
+
+    var displayDesign: Font.Design {
+        switch self {
+        case .editorial, .classic: return .serif
+        case .system: return .default
+        case .rounded: return .rounded
+        }
+    }
+
+    var titleDesign: Font.Design {
+        switch self {
+        case .editorial, .classic: return .serif
+        case .system: return .default
+        case .rounded: return .rounded
+        }
+    }
+
+    var bodyDesign: Font.Design {
+        switch self {
+        case .rounded: return .rounded
+        default: return .default
+        }
+    }
+
+    var metadataDesign: Font.Design {
+        switch self {
+        case .editorial: return .monospaced
+        case .rounded: return .rounded
+        default: return .default
+        }
+    }
+
+    var usesItalicDisplay: Bool {
+        self == .editorial
+    }
+
+    var previewFont: Font {
+        let base = Font.system(size: 24, weight: .bold, design: displayDesign)
+        return usesItalicDisplay ? base.italic() : base
+    }
+}
+
+enum FontPreferenceStorage {
+    static let key = "fontPreference"
+}
+
+enum FontSizePreference: String, CaseIterable, Identifiable {
+    case compact
+    case standard
+    case large
+    case extraLarge
+
+    var id: String { rawValue }
+
+    static var current: FontSizePreference {
+        FontSizePreference(rawValue: UserDefaults.standard.string(forKey: FontSizePreferenceStorage.key) ?? "") ?? .standard
+    }
+
+    var label: String {
+        switch self {
+        case .compact: return "Compact"
+        case .standard: return "Standard"
+        case .large: return "Large"
+        case .extraLarge: return "XL"
+        }
+    }
+
+    var multiplier: CGFloat {
+        switch self {
+        case .compact: return 0.92
+        case .standard: return 1.0
+        case .large: return 1.10
+        case .extraLarge: return 1.20
+        }
+    }
+}
+
+enum FontSizePreferenceStorage {
+    static let key = "fontSizePreference"
+}
+
+private struct FontPreferenceModifier: ViewModifier {
+    @AppStorage(FontPreferenceStorage.key) private var raw: String = FontPreference.editorial.rawValue
+    @AppStorage(FontSizePreferenceStorage.key) private var sizeRaw: String = FontSizePreference.standard.rawValue
+
+    func body(content: Content) -> some View {
+        let preference = FontPreference(rawValue: raw) ?? .editorial
+        let sizePreference = FontSizePreference(rawValue: sizeRaw) ?? .standard
+        content
+            .font(.system(size: 14 * sizePreference.multiplier, weight: .regular, design: preference.bodyDesign))
+    }
+}
+
 /// Applies the user's persisted appearance preference at the root of the view tree.
 private struct AppearancePreferenceModifier: ViewModifier {
     @AppStorage(AppearanceStorage.key) private var raw: String = AppearancePreference.system.rawValue
@@ -481,5 +623,10 @@ extension View {
     /// Apply the user's saved Light/Dark/System preference.
     func appearancePreference() -> some View {
         modifier(AppearancePreferenceModifier())
+    }
+
+    /// Apply the user's saved typography preference.
+    func fontPreference() -> some View {
+        modifier(FontPreferenceModifier())
     }
 }

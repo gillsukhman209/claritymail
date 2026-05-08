@@ -9,6 +9,7 @@ import {
 } from "../db/accounts.repo.js";
 import { saveDeviceToken } from "../db/deviceTokens.repo.js";
 import { listBlockedSenderEmails, filterBlockedEmails } from "../db/blockedSenders.repo.js";
+import { filterHiddenEmails, listHiddenSenderEmails } from "../db/hiddenSenders.repo.js";
 import {
   filterMutedEmails,
   filterMutedSuppressedEmails,
@@ -63,6 +64,7 @@ async function notifyFreshInboxMessages(account: NonNullable<Awaited<ReturnType<
   if (messageIds.length === 0) return;
 
   const blockedSenders = await listBlockedSenderEmails(account.id);
+  const hiddenSenders = await listHiddenSenderEmails(account.id);
   const mutedSenders = await listMutedSenderEmails(account.id);
   const mutedSuppressions = await listMutedSenderNotificationSuppressions(account.id);
   const emails = await Promise.all(
@@ -76,13 +78,16 @@ async function notifyFreshInboxMessages(account: NonNullable<Awaited<ReturnType<
   );
 
   const notifyableEmails = filterMutedSuppressedEmails(
-    filterMutedEmails(
-      filterBlockedEmails(
-        emails.filter((email): email is NonNullable<typeof email> => Boolean(email)),
-        blockedSenders
+      filterMutedEmails(
+        filterHiddenEmails(
+          filterBlockedEmails(
+            emails.filter((email): email is NonNullable<typeof email> => Boolean(email)),
+            blockedSenders
+          ),
+          hiddenSenders
+        ),
+        mutedSenders
       ),
-      mutedSenders
-    ),
     mutedSuppressions
   ).filter(isFreshUnreadEmail);
 

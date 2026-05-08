@@ -48,6 +48,14 @@ struct APIClient {
         return response.mutedSenders.sortedByNewestUpdate
     }
 
+    func hiddenSenders(accountId: String? = nil) async throws -> [HiddenSender] {
+        let response: HiddenSendersResponse = try await get(
+            "/hidden-senders",
+            queryItems: accountQueryItems(accountId: accountId)
+        )
+        return response.hiddenSenders.sortedByNewestUpdate
+    }
+
     func markSenderImportant(id: Email.ID, accountId: String? = nil) async throws -> String {
         let response: ImportantSenderActionResponse = try await postForResponse(
             "/emails/\(id)/important-sender",
@@ -59,6 +67,14 @@ struct APIClient {
     func muteSender(id: Email.ID, accountId: String? = nil) async throws -> String {
         let response: MutedSenderActionResponse = try await postForResponse(
             "/emails/\(id)/mute-sender",
+            queryItems: accountQueryItems(accountId: accountId)
+        )
+        return response.senderEmail
+    }
+
+    func hideSender(id: Email.ID, accountId: String? = nil) async throws -> String {
+        let response: HiddenSenderActionResponse = try await postForResponse(
+            "/emails/\(id)/hide-sender",
             queryItems: accountQueryItems(accountId: accountId)
         )
         return response.senderEmail
@@ -77,6 +93,19 @@ struct APIClient {
         }
     }
 
+    func hideSender(senderEmail: String, accountId: String, fallbackEmailId: Email.ID? = nil) async throws -> String {
+        do {
+            let response: HiddenSenderActionResponse = try await postJSONForResponse(
+                "/hidden-senders",
+                body: SenderActionRequest(accountId: accountId, senderEmail: senderEmail)
+            )
+            return response.senderEmail
+        } catch {
+            guard let fallbackEmailId else { throw error }
+            return try await hideSender(id: fallbackEmailId, accountId: accountId)
+        }
+    }
+
     func removeImportantSender(accountId: String, senderEmail: String) async throws {
         try await delete(
             "/important-senders",
@@ -90,6 +119,16 @@ struct APIClient {
     func unmuteSender(accountId: String, senderEmail: String) async throws {
         try await delete(
             "/muted-senders",
+            queryItems: [
+                URLQueryItem(name: "accountId", value: accountId),
+                URLQueryItem(name: "senderEmail", value: senderEmail)
+            ]
+        )
+    }
+
+    func unhideSender(accountId: String, senderEmail: String) async throws {
+        try await delete(
+            "/hidden-senders",
             queryItems: [
                 URLQueryItem(name: "accountId", value: accountId),
                 URLQueryItem(name: "senderEmail", value: senderEmail)
@@ -626,6 +665,7 @@ enum MailboxFolder: String, CaseIterable, Identifiable {
     case drafts
     case archive
     case trash
+    case hidden
 
     var id: String { rawValue }
 
@@ -636,6 +676,7 @@ enum MailboxFolder: String, CaseIterable, Identifiable {
         case .drafts: return "Drafts"
         case .archive: return "Archive"
         case .trash: return "Trash"
+        case .hidden: return "Hidden"
         }
     }
 
@@ -646,6 +687,7 @@ enum MailboxFolder: String, CaseIterable, Identifiable {
         case .drafts: return "doc.text.fill"
         case .archive: return "archivebox.fill"
         case .trash: return "trash.fill"
+        case .hidden: return "eye.slash.fill"
         }
     }
 }
@@ -727,6 +769,14 @@ private struct MutedSendersResponse: Decodable {
 }
 
 private struct MutedSenderActionResponse: Decodable {
+    let senderEmail: String
+}
+
+private struct HiddenSendersResponse: Decodable {
+    let hiddenSenders: [HiddenSender]
+}
+
+private struct HiddenSenderActionResponse: Decodable {
     let senderEmail: String
 }
 
@@ -821,6 +871,17 @@ struct MutedSender: Identifiable, Hashable, Decodable {
     let sortAt: Double?
 }
 
+struct HiddenSender: Identifiable, Hashable, Decodable {
+    let id: String
+    let accountId: String
+    let accountEmail: String
+    let senderEmail: String
+    let senderName: String
+    let createdAt: String?
+    let updatedAt: String?
+    let sortAt: Double?
+}
+
 private protocol SenderListRecord {
     var createdAt: String? { get }
     var updatedAt: String? { get }
@@ -829,6 +890,7 @@ private protocol SenderListRecord {
 
 extension BlockedSender: SenderListRecord {}
 extension MutedSender: SenderListRecord {}
+extension HiddenSender: SenderListRecord {}
 
 private extension Array where Element: SenderListRecord {
     var sortedByNewestUpdate: [Element] {

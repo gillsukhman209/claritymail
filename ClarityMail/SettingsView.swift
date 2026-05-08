@@ -13,6 +13,9 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage("undoSendDelaySeconds") private var undoSendDelaySeconds = 10
     @AppStorage(AppearanceStorage.key) private var appearanceRaw: String = AppearancePreference.system.rawValue
+    @AppStorage(FontPreferenceStorage.key) private var fontPreferenceRaw: String = FontPreference.editorial.rawValue
+    @AppStorage(FontSizePreferenceStorage.key) private var fontSizePreferenceRaw: String = FontSizePreference.standard.rawValue
+    @AppStorage("hideEmailSubjects") private var hideEmailSubjects = false
     @AppStorage(AppNotificationSound.storageKey) private var selectedNotificationSoundRaw = AppNotificationSound.chime.rawValue
     @State private var isWorking = false
     @State private var isSavingBrief = false
@@ -31,6 +34,8 @@ struct SettingsView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 28) {
                     appearanceSection
+                    typographySection
+                    inboxDisplaySection
                     sendingSection
                     notificationsSection
                     morningBriefSection
@@ -100,6 +105,14 @@ struct SettingsView: View {
         AppearancePreference(rawValue: appearanceRaw) ?? .system
     }
 
+    private var fontPreference: FontPreference {
+        FontPreference(rawValue: fontPreferenceRaw) ?? .editorial
+    }
+
+    private var fontSizePreference: FontSizePreference {
+        FontSizePreference(rawValue: fontSizePreferenceRaw) ?? .standard
+    }
+
     private var appearanceSection: some View {
         SettingsCard(title: "Appearance", systemImage: "circle.lefthalf.filled") {
             VStack(alignment: .leading, spacing: 14) {
@@ -128,6 +141,74 @@ struct SettingsView: View {
                             }
                         }
                     }
+                }
+            }
+        }
+    }
+
+    private var typographySection: some View {
+        SettingsCard(title: "Typography", systemImage: "textformat") {
+            VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("App font")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(Theme.Palette.textPrimary)
+                    Text("Choose the reading style that feels best. Editorial keeps the current ClarityMail personality.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.Palette.textTertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                LazyVGrid(
+                    columns: [
+                        GridItem(.flexible(), spacing: 10),
+                        GridItem(.flexible(), spacing: 10)
+                    ],
+                    spacing: 10
+                ) {
+                    ForEach(FontPreference.allCases) { option in
+                        FontOptionTile(
+                            option: option,
+                            isSelected: fontPreference == option
+                        ) {
+                            withAnimation(Theme.Motion.snappy) {
+                                fontPreferenceRaw = option.rawValue
+                            }
+                        }
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Text size")
+                        .font(Theme.Typography.body(14, weight: .semibold))
+                        .foregroundStyle(Theme.Palette.textPrimary)
+
+                    HStack(spacing: 0) {
+                        ForEach(Array(FontSizePreference.allCases.enumerated()), id: \.element.id) { index, option in
+                            Button {
+                                withAnimation(Theme.Motion.snappy) {
+                                    fontSizePreferenceRaw = option.rawValue
+                                }
+                            } label: {
+                                Text(option.label.uppercased())
+                                    .font(Theme.Typography.mono(10, weight: .heavy))
+                                    .tracking(1.1)
+                                    .foregroundStyle(fontSizePreference == option ? Theme.Palette.background : Theme.Palette.textSecondary)
+                                    .frame(maxWidth: .infinity)
+                                    .frame(height: 34)
+                                    .background(fontSizePreference == option ? Theme.Palette.textPrimary : Color.clear)
+                            }
+                            .buttonStyle(.plain)
+                            .overlay(alignment: .trailing) {
+                                if index < FontSizePreference.allCases.count - 1 {
+                                    Rectangle()
+                                        .fill(Theme.Palette.border)
+                                        .frame(width: 0.5)
+                                }
+                            }
+                        }
+                    }
+                    .overlay(Rectangle().strokeBorder(Theme.Palette.borderStrong, lineWidth: 1))
                 }
             }
         }
@@ -176,6 +257,22 @@ struct SettingsView: View {
                         .strokeBorder(Theme.Palette.borderStrong, lineWidth: 1)
                 )
             }
+        }
+    }
+
+    private var inboxDisplaySection: some View {
+        SettingsCard(title: "Inbox Display", systemImage: "list.bullet.rectangle") {
+            Toggle(isOn: $hideEmailSubjects) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Hide subject lines")
+                        .font(Theme.Typography.body(14, weight: .semibold))
+                        .foregroundStyle(Theme.Palette.textPrimary)
+                    Text("Email rows will show sender and body preview only.")
+                        .font(Theme.Typography.body(12))
+                        .foregroundStyle(Theme.Palette.textTertiary)
+                }
+            }
+            .toggleStyle(.switch)
         }
     }
 
@@ -659,6 +756,51 @@ private struct AccountSettingsRow: View {
     private var initials: String {
         let name = account.email.split(separator: "@").first.map(String.init) ?? "G"
         return String(name.prefix(1)).uppercased()
+    }
+}
+
+private struct FontOptionTile: View {
+    let option: FontPreference
+    let isSelected: Bool
+    let onTap: () -> Void
+
+    var body: some View {
+        Button(action: onTap) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Text(option.sampleTitle)
+                        .font(option.previewFont)
+                        .foregroundStyle(Theme.Palette.textPrimary)
+                        .lineLimit(1)
+
+                    Spacer()
+
+                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(isSelected ? Theme.Palette.accent : Theme.Palette.textTertiary)
+                }
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(option.label.uppercased())
+                        .font(.system(size: 10, weight: .heavy, design: option.metadataDesign))
+                        .tracking(option == .editorial ? 1.4 : 0.6)
+                    Text(option.description)
+                        .font(.system(size: 12, weight: .regular, design: option.bodyDesign))
+                        .foregroundStyle(Theme.Palette.textTertiary)
+                        .lineLimit(2)
+                }
+                .foregroundStyle(Theme.Palette.textSecondary)
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, minHeight: 104, alignment: .leading)
+            .background(Theme.Palette.surface)
+            .overlay(
+                RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
+                    .strokeBorder(isSelected ? Theme.Palette.textPrimary : Theme.Palette.border, lineWidth: isSelected ? 1.5 : 1)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }
 

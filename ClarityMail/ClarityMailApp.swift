@@ -21,6 +21,7 @@ struct ClarityMailApp: App {
         WindowGroup {
             ContentView()
                 .appearancePreference()
+                .fontPreference()
         }
         #if os(macOS)
         .defaultSize(width: 1280, height: 860)

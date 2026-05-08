@@ -31,6 +31,7 @@ struct Email: Identifiable, Hashable, Codable {
     var priorityReason: String? = nil
     var isMutedSender: Bool? = false
     var isBlockedSender: Bool? = false
+    var isHiddenSender: Bool? = false
 
     var isPriority: Bool {
         priorityStatus == .important
@@ -163,6 +164,7 @@ struct Email: Identifiable, Hashable, Codable {
         case priorityReason
         case isMutedSender
         case isBlockedSender
+        case isHiddenSender
     }
 }
 

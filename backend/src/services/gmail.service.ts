@@ -7,7 +7,7 @@ type GmailAccount = {
   lastHistoryId?: string | null;
 };
 
-export type MailboxFolder = "inbox" | "sent" | "archive" | "trash" | "drafts";
+export type MailboxFolder = "inbox" | "sent" | "archive" | "trash" | "drafts" | "hidden";
 
 export type EmailAttachment = {
   filename: string;
@@ -393,6 +393,8 @@ function mailboxListOptions(folder: MailboxFolder, query?: string) {
         labelIds: undefined,
         q: ["-in:inbox", "-in:sent", "-in:trash", "-in:drafts", trimmedQuery].filter(Boolean).join(" ")
       };
+    case "hidden":
+      return { labelIds: ["INBOX"], q: trimmedQuery || undefined };
     case "inbox":
     default:
       return { labelIds: ["INBOX"], q: trimmedQuery || undefined };

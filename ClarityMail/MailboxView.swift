@@ -24,6 +24,7 @@ struct MailboxView: View {
     @State private var isShowingComposer = false
     @State private var isShowingBlockedSenders = false
     @State private var isShowingMutedSenders = false
+    @State private var isShowingHiddenSenders = false
     @State private var isShowingSettings = false
     @State private var isShowingMorningBrief = false
     @State private var draftToEdit: Email?
@@ -210,6 +211,8 @@ struct MailboxView: View {
                     updatePrioritySender(senderEmail: senderEmail, isImportant: isImportant)
                 } onMutedSenderChanged: { senderEmail, isMuted in
                     updateMutedSender(senderEmail: senderEmail, isMuted: isMuted)
+                } onHiddenSenderChanged: { senderEmail, isHidden in
+                    updateHiddenSender(senderEmail: senderEmail, isHidden: isHidden)
                 } onReadStateChanged: { id, isRead in
                     updateEmailReadState(id: id, isRead: isRead)
                 }
@@ -319,6 +322,12 @@ struct MailboxView: View {
             .sheet(isPresented: $isShowingMutedSenders) {
                 MutedSendersView(accountId: selectedAccountId)
                     .iosSheetPresentation()
+            }
+            .sheet(isPresented: $isShowingHiddenSenders) {
+                HiddenSendersView(accountId: selectedAccountId) {
+                    Task { await loadEmails() }
+                }
+                .iosSheetPresentation()
             }
             .sheet(isPresented: $isShowingSettings) {
                 SettingsView(accounts: accounts) {
@@ -447,6 +456,9 @@ struct MailboxView: View {
                 },
                 onManageMutedSenders: {
                     isShowingMutedSenders = true
+                },
+                onManageHiddenSenders: {
+                    isShowingHiddenSenders = true
                 },
                 onOpenSettings: {
                     isShowingSettings = true
@@ -593,12 +605,6 @@ struct MailboxView: View {
                     }
                     .buttonStyle(BulkActionButtonStyle())
 
-                    Text("\(selectedEmailIds.count) SELECTED")
-                        .font(Theme.Typography.mono(10, weight: .heavy))
-                        .tracking(1.4)
-                        .foregroundStyle(Theme.Palette.textSecondary)
-                        .frame(minWidth: 92, alignment: .leading)
-
                     if isPerformingBulkAction {
                         ProgressView()
                             .controlSize(.small)
@@ -608,16 +614,28 @@ struct MailboxView: View {
                             .foregroundStyle(Theme.Palette.textSecondary)
                     }
 
-                    bulkActionButton(.archive)
-                        .disabled(selectedFolder == .drafts || selectedFolder == .sent || selectedEmailIds.isEmpty)
-                    bulkActionButton(.trash)
-                        .disabled(selectedEmailIds.isEmpty)
-                    bulkActionButton(.markRead)
-                        .disabled(selectedFolder == .drafts || selectedEmailIds.isEmpty)
-                    bulkActionButton(.markUnread)
-                        .disabled(selectedFolder == .drafts || selectedEmailIds.isEmpty)
-
                     Menu {
+                        if selectedFolder != .drafts && selectedFolder != .sent {
+                            Button { Task { await performBulkAction(.archive) } } label: {
+                                Label("Archive", systemImage: "archivebox")
+                            }
+                        }
+
+                        Button(role: .destructive) { Task { await performBulkAction(.trash) } } label: {
+                            Label(selectedFolder == .drafts ? "Delete Drafts" : "Move to Trash", systemImage: "trash")
+                        }
+
+                        if selectedFolder != .drafts {
+                            Divider()
+                            Button { Task { await performBulkAction(.markRead) } } label: {
+                                Label("Mark as Read", systemImage: "envelope.open")
+                            }
+                            Button { Task { await performBulkAction(.markUnread) } } label: {
+                                Label("Mark as Unread", systemImage: "envelope.badge")
+                            }
+                        }
+
+                        Divider()
                         Button { Task { await performBulkAction(.star) } } label: {
                             Label("Star", systemImage: "star")
                         }
@@ -630,20 +648,26 @@ struct MailboxView: View {
                         Button { Task { await performBulkAction(.unpin) } } label: {
                             Label("Unpin", systemImage: "pin.slash")
                         }
-                        Divider()
-                        Button(role: .destructive) { Task { await performBulkAction(.blockSender) } } label: {
-                            Label("Block Senders", systemImage: "hand.raised")
-                        }
-                        Button { Task { await performBulkAction(.muteSender) } } label: {
-                            Label("Mute Senders", systemImage: "bell.slash")
+
+                        if selectedFolder != .drafts {
+                            Divider()
+                            Button(role: .destructive) { Task { await performBulkAction(.blockSender) } } label: {
+                                Label("Block Senders", systemImage: "hand.raised")
+                            }
+                            Button { Task { await performBulkAction(.muteSender) } } label: {
+                                Label("Mute Senders", systemImage: "bell.slash")
+                            }
+                            Button { Task { await performBulkAction(.hideSender) } } label: {
+                                Label("Hide Senders", systemImage: "eye.slash")
+                            }
                         }
                     } label: {
-                        Image(systemName: isPerformingBulkAction ? "hourglass" : "ellipsis")
-                            .font(.system(size: 13, weight: .heavy))
-                            .frame(width: 36, height: 30)
+                        Label("Actions (\(selectedEmailIds.count))", systemImage: isPerformingBulkAction ? "hourglass" : "ellipsis.circle")
+                            .labelStyle(.titleAndIcon)
+                            .frame(minWidth: 112, minHeight: 30)
                     }
                     .buttonStyle(BulkActionButtonStyle())
-                    .disabled(selectedFolder == .drafts || selectedEmailIds.isEmpty || isPerformingBulkAction)
+                    .disabled(selectedEmailIds.isEmpty || isPerformingBulkAction)
                 }
             }
         }
@@ -908,6 +932,26 @@ struct MailboxView: View {
         }
     }
 
+    private func updateHiddenSender(senderEmail: String, isHidden: Bool) {
+        let normalizedSender = senderEmail.lowercased()
+
+        if isHidden && selectedFolder != .hidden {
+            emails.removeAll { $0.senderEmailAddress.lowercased() == normalizedSender }
+            if selectedEmail?.senderEmailAddress.lowercased() == normalizedSender {
+                selectedEmail = nil
+            }
+            return
+        }
+
+        emails = emails.map { email in
+            var updated = email
+            if email.senderEmailAddress.lowercased() == normalizedSender {
+                updated.isHiddenSender = isHidden
+            }
+            return updated
+        }
+    }
+
     private func updateEmailReadState(id: Email.ID, isRead: Bool) {
         for index in emails.indices where emails[index].id == id {
             emails[index].isRead = isRead
@@ -1056,6 +1100,16 @@ struct MailboxView: View {
                 accountId: accountId,
                 fallbackEmailId: email.id
             )
+        case .hideSender:
+            guard let accountId = email.accountId else {
+                _ = try await apiClient.hideSender(id: email.id, accountId: email.accountId)
+                return
+            }
+            _ = try await apiClient.hideSender(
+                senderEmail: email.senderEmailAddress,
+                accountId: accountId,
+                fallbackEmailId: email.id
+            )
         }
     }
 
@@ -1103,6 +1157,14 @@ struct MailboxView: View {
         case .muteSender:
             for index in emails.indices where ids.contains(emails[index].id) || senderEmails.contains(emails[index].senderEmailAddress.lowercased()) {
                 emails[index].isMutedSender = true
+            }
+        case .hideSender:
+            if selectedFolder == .hidden {
+                for index in emails.indices where ids.contains(emails[index].id) || senderEmails.contains(emails[index].senderEmailAddress.lowercased()) {
+                    emails[index].isHiddenSender = true
+                }
+            } else {
+                emails.removeAll { ids.contains($0.id) || senderEmails.contains($0.senderEmailAddress.lowercased()) }
             }
         }
     }
@@ -1603,6 +1665,7 @@ private struct AccountSearchBar: View {
     let onRefreshAccounts: () -> Void
     let onManageBlockedSenders: () -> Void
     let onManageMutedSenders: () -> Void
+    let onManageHiddenSenders: () -> Void
     let onOpenSettings: () -> Void
 
     private var selectedAccount: GmailAccount? {
@@ -1716,6 +1779,9 @@ private struct AccountSearchBar: View {
                     }
                     Button(action: onManageMutedSenders) {
                         Label("Muted Senders", systemImage: "bell.slash")
+                    }
+                    Button(action: onManageHiddenSenders) {
+                        Label("Hidden Senders", systemImage: "eye.slash")
                     }
                     Button(action: onOpenSettings) {
                         Label("Settings", systemImage: "gearshape")
@@ -1923,6 +1989,7 @@ private struct GreetingBlock: View {
         case .drafts:  return "Drafts"
         case .archive: return "Archive"
         case .trash:   return "Trash"
+        case .hidden:  return "Hidden"
         }
     }
 
@@ -1969,6 +2036,7 @@ private enum BulkEmailAction: String, CaseIterable {
     case unpin
     case blockSender
     case muteSender
+    case hideSender
 
     var title: String {
         switch self {
@@ -1982,6 +2050,7 @@ private enum BulkEmailAction: String, CaseIterable {
         case .unpin: return "Unpin"
         case .blockSender: return "Block"
         case .muteSender: return "Mute"
+        case .hideSender: return "Hide"
         }
     }
 
@@ -1997,12 +2066,13 @@ private enum BulkEmailAction: String, CaseIterable {
         case .unpin: return "pin.slash"
         case .blockSender: return "hand.raised"
         case .muteSender: return "bell.slash"
+        case .hideSender: return "eye.slash"
         }
     }
 
     var isSenderScopedAction: Bool {
         switch self {
-        case .blockSender, .muteSender:
+        case .blockSender, .muteSender, .hideSender:
             return true
         default:
             return false
@@ -2017,7 +2087,7 @@ private enum BulkEmailAction: String, CaseIterable {
         case .markUnread: return .markUnread
         case .star: return .star
         case .unstar: return .unstar
-        case .pin, .unpin, .blockSender, .muteSender:
+        case .pin, .unpin, .blockSender, .muteSender, .hideSender:
             return nil
         }
     }
@@ -2093,6 +2163,7 @@ private struct EmailRowView: View {
     var isSelectionMode = false
     var isSelected = false
     var onToggleSelection: () -> Void = {}
+    @AppStorage("hideEmailSubjects") private var hideEmailSubjects = false
 
     private var isUnread: Bool { !email.isRead }
 
@@ -2112,7 +2183,7 @@ private struct EmailRowView: View {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(email.displayName)
-                        .font(.system(size: 14, weight: isUnread ? .bold : .regular))
+                        .font(Theme.Typography.body(14, weight: isUnread ? .bold : .regular))
                         .foregroundStyle(Theme.Palette.textPrimary)
                         .lineLimit(1)
 
@@ -2145,17 +2216,20 @@ private struct EmailRowView: View {
                     }
                 }
 
-                Text(email.subject)
-                    .font(.system(size: 14.5, weight: isUnread ? .semibold : .regular, design: .serif))
-                    .foregroundStyle(Theme.Palette.textPrimary)
-                    .lineLimit(1)
+                if !hideEmailSubjects {
+                    Text(email.subject)
+                        .font(Theme.Typography.title(14.5))
+                        .foregroundStyle(Theme.Palette.textPrimary)
+                        .fontWeight(isUnread ? .semibold : .regular)
+                        .lineLimit(1)
+                }
 
                 Text(email.snippet)
-                    .font(.system(size: 12.5))
+                    .font(Theme.Typography.body(12.5))
                     .foregroundStyle(Theme.Palette.textSecondary)
-                    .lineLimit(1)
+                    .lineLimit(hideEmailSubjects ? 2 : 1)
 
-                if email.isPinned == true || email.isBlockedSender == true || email.isMutedSender == true || (email.isPriority && showPriorityLabel) {
+                if email.isPinned == true || email.isBlockedSender == true || email.isMutedSender == true || email.isHiddenSender == true || (email.isPriority && showPriorityLabel) {
                     HStack(spacing: 8) {
                         if email.isPinned == true {
                             EmailRowChip(
@@ -2176,6 +2250,13 @@ private struct EmailRowView: View {
                                 title: "Muted Sender",
                                 systemImage: nil,
                                 color: Theme.Palette.warm
+                            )
+                        }
+                        if email.isHiddenSender == true {
+                            EmailRowChip(
+                                title: "Hidden Sender",
+                                systemImage: nil,
+                                color: Theme.Palette.textTertiary
                             )
                         }
                         if email.isPriority && showPriorityLabel {

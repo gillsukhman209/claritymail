@@ -1,5 +1,6 @@
 import { getGoogleAccountById, listGoogleAccounts } from "../db/accounts.repo.js";
 import { listBlockedSenderEmails, filterBlockedEmails } from "../db/blockedSenders.repo.js";
+import { listHiddenSenderEmails, filterHiddenEmails } from "../db/hiddenSenders.repo.js";
 import {
   getLatestMorningBrief,
   getMorningBriefSettings,
@@ -34,7 +35,8 @@ export async function generateMorningBrief(input: { accountId?: string; now?: Da
 
       const emails = await listEmailsInWindow(account, windowStart, windowEnd, { unreadOnly: settings.unreadOnly });
       const blockedSenderEmails = await listBlockedSenderEmails(account.id ?? summary.id);
-      return filterBlockedEmails(emails, blockedSenderEmails);
+      const hiddenSenderEmails = await listHiddenSenderEmails(account.id ?? summary.id);
+      return filterHiddenEmails(filterBlockedEmails(emails, blockedSenderEmails), hiddenSenderEmails);
     })
   );
 
