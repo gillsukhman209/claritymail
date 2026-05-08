@@ -907,7 +907,7 @@ struct ComposerView: View {
             draftThreadId = result.threadId.isEmpty ? draftThreadId : result.threadId
             lastSavedDraftFingerprint = fingerprint
         } catch {
-            errorMessage = "Could not save draft."
+            // Draft autosave is best-effort. Explicit send/schedule errors still show.
         }
     }
 

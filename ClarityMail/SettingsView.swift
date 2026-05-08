@@ -7,6 +7,7 @@ import SwiftUI
 
 struct SettingsView: View {
     let accounts: [GmailAccount]
+    let onAddAccount: () -> Void
     let onAccountsChanged: () -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -194,6 +195,17 @@ struct SettingsView: View {
                         }
                     }
                 }
+
+                Button(action: onAddAccount) {
+                    Label("ADD GMAIL ACCOUNT", systemImage: "plus")
+                        .font(Theme.Typography.mono(10, weight: .heavy))
+                        .tracking(1.4)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .overlay(Rectangle().strokeBorder(Theme.Palette.borderStrong, lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Theme.Palette.accent)
             }
         }
     }
@@ -614,10 +626,10 @@ private struct AccountSettingsRow: View {
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(Theme.Palette.textPrimary)
                     .lineLimit(1)
-                Text("GMAIL · CONNECTED")
+                Text(account.isDisconnected ? "GMAIL · RECONNECT NEEDED" : "GMAIL · CONNECTED")
                     .font(Theme.Typography.mono(9, weight: .heavy))
                     .tracking(1.6)
-                    .foregroundStyle(Theme.Palette.textTertiary)
+                    .foregroundStyle(account.isDisconnected ? Theme.Palette.danger : Theme.Palette.textTertiary)
             }
 
             Spacer()

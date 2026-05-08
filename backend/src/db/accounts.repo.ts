@@ -20,6 +20,9 @@ type GoogleAccountSummary = {
   id: string;
   email: string;
   provider: string;
+  isConnected: boolean;
+  connectionError: string | null;
+  connectionCheckedAt: string | null;
 };
 
 const accountCacheTtlMs = 5 * 60 * 1000;
@@ -53,7 +56,15 @@ function rememberAccount(account: GoogleAccount, provider = "gmail") {
   accountEmailIndex.set(account.email.toLowerCase(), account.id);
 
   if (accountSummariesCacheIsComplete && accountSummariesCache) {
-    const summary = { id: account.id, email: account.email, provider };
+    const existing = accountSummariesCache.find((cached) => cached.id === account.id);
+    const summary = {
+      id: account.id,
+      email: account.email,
+      provider,
+      isConnected: existing?.isConnected ?? true,
+      connectionError: existing?.connectionError ?? null,
+      connectionCheckedAt: existing?.connectionCheckedAt ?? null
+    };
     accountSummariesCache = [
       summary,
       ...accountSummariesCache.filter((cached) => cached.id !== account.id)
@@ -96,6 +107,9 @@ export async function saveGoogleAccount(profile: GoogleProfile, tokens: Credenti
       scope: tokens.scope ?? null,
       tokenType: tokens.token_type ?? null,
       expiryDate: tokens.expiry_date ?? null,
+      isConnected: true,
+      connectionError: null,
+      connectionCheckedAt: new Date(),
       updatedAt: new Date()
     },
     { merge: true }
@@ -104,7 +118,10 @@ export async function saveGoogleAccount(profile: GoogleProfile, tokens: Credenti
   const summary = {
     id: accountRef.id,
     email: profile.email,
-    provider: "gmail"
+    provider: "gmail",
+    isConnected: true,
+    connectionError: null,
+    connectionCheckedAt: new Date().toISOString()
   };
   accountSummariesCache = null;
   accountSummariesCacheIsComplete = false;
@@ -156,7 +173,10 @@ export async function listGoogleAccounts() {
     return {
       id: doc.id,
       email: String(data.email),
-      provider: String(data.provider ?? "gmail")
+      provider: String(data.provider ?? "gmail"),
+      isConnected: data.isConnected !== false,
+      connectionError: typeof data.connectionError === "string" ? data.connectionError : null,
+      connectionCheckedAt: data.connectionCheckedAt?.toDate?.().toISOString?.() ?? null
     };
   });
   rememberSummaries(summaries);
@@ -217,6 +237,53 @@ export async function deleteGoogleAccount(accountId: string) {
   accountDetailsCache.delete(accountId);
   accountSummariesCache = accountSummariesCache?.filter((account) => account.id !== accountId) ?? null;
   accountSummariesCacheIsComplete = Boolean(accountSummariesCache);
+}
+
+function updateCachedConnectionState(
+  accountId: string,
+  input: { isConnected: boolean; connectionError: string | null; connectionCheckedAt: string }
+) {
+  if (!accountSummariesCache) return;
+  accountSummariesCache = accountSummariesCache.map((account) =>
+    account.id === accountId ? { ...account, ...input } : account
+  );
+}
+
+export async function markGoogleAccountConnected(accountId: string) {
+  const checkedAt = new Date();
+  const db = getFirestore();
+  await db.collection("gmailAccounts").doc(accountId).set(
+    {
+      isConnected: true,
+      connectionError: null,
+      connectionCheckedAt: checkedAt
+    },
+    { merge: true }
+  );
+  updateCachedConnectionState(accountId, {
+    isConnected: true,
+    connectionError: null,
+    connectionCheckedAt: checkedAt.toISOString()
+  });
+}
+
+export async function markGoogleAccountConnectionError(accountId: string, error: unknown) {
+  const checkedAt = new Date();
+  const message = error instanceof Error ? error.message : String(error);
+  const db = getFirestore();
+  await db.collection("gmailAccounts").doc(accountId).set(
+    {
+      isConnected: false,
+      connectionError: message.slice(0, 300),
+      connectionCheckedAt: checkedAt
+    },
+    { merge: true }
+  );
+  updateCachedConnectionState(accountId, {
+    isConnected: false,
+    connectionError: message.slice(0, 300),
+    connectionCheckedAt: checkedAt.toISOString()
+  });
 }
 
 export async function updateGmailWatchState(

@@ -163,6 +163,19 @@ struct APIClient {
         try await post("/emails/\(id)/trash", queryItems: accountQueryItems(accountId: accountId))
     }
 
+    func bulkUpdateEmails(_ emails: [Email], action: BulkEmailRequestAction) async throws -> BulkEmailResponse {
+        try await postJSONForResponse(
+            "/emails/bulk",
+            body: BulkEmailRequest(
+                action: action.rawValue,
+                emails: emails.compactMap { email in
+                    guard let accountId = email.accountId else { return nil }
+                    return BulkEmailRequestItem(id: email.id, accountId: accountId)
+                }
+            )
+        )
+    }
+
     func blockSender(id: Email.ID, accountId: String? = nil) async throws -> String {
         let response: BlockSenderResponse = try await postForResponse(
             "/emails/\(id)/block-sender",
@@ -721,6 +734,36 @@ private struct AccountsResponse: Decodable {
     let accounts: [GmailAccount]
 }
 
+enum BulkEmailRequestAction: String {
+    case archive
+    case trash
+    case markRead
+    case markUnread
+    case star
+    case unstar
+}
+
+private struct BulkEmailRequest: Encodable {
+    let action: String
+    let emails: [BulkEmailRequestItem]
+}
+
+private struct BulkEmailRequestItem: Encodable {
+    let id: String
+    let accountId: String
+}
+
+struct BulkEmailResponse: Decodable {
+    let ok: Bool
+    let updatedIds: [String]
+    let failed: [BulkEmailFailedItem]
+}
+
+struct BulkEmailFailedItem: Decodable {
+    let id: String
+    let accountId: String
+}
+
 struct SyncStatus: Decodable {
     let unreadInboxCount: Int
     let checkedAt: String
@@ -735,6 +778,13 @@ struct GmailAccount: Identifiable, Hashable, Decodable {
     let id: String
     let email: String
     let provider: String
+    let isConnected: Bool?
+    let connectionError: String?
+    let connectionCheckedAt: String?
+
+    var isDisconnected: Bool {
+        isConnected == false
+    }
 }
 
 struct AuthStatus: Decodable {

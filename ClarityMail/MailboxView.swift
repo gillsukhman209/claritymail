@@ -322,6 +322,9 @@ struct MailboxView: View {
             }
             .sheet(isPresented: $isShowingSettings) {
                 SettingsView(accounts: accounts) {
+                    isShowingSettings = false
+                    Task { await session.signInWithGoogle() }
+                } onAccountsChanged: {
                     Task {
                         await loadAccounts()
                         await loadEmails()
@@ -406,8 +409,7 @@ struct MailboxView: View {
         VStack(alignment: .leading, spacing: 0) {
             AuroraHeader(
                 unreadCount: unreadCount,
-                onOpenSettings: { isShowingSettings = true },
-                onAddAccount: { Task { await session.signInWithGoogle() } }
+                onOpenSettings: { isShowingSettings = true }
             )
             .pageGutter()
             .padding(.top, 14)
@@ -434,9 +436,6 @@ struct MailboxView: View {
                 selectedFolder: $selectedFolder,
                 isPriorityMode: $isPriorityMode,
                 searchText: $searchText,
-                onAddAccount: {
-                    Task { await session.signInWithGoogle() }
-                },
                 onRefreshAccounts: {
                     Task {
                         await loadAccounts()
@@ -599,6 +598,15 @@ struct MailboxView: View {
                         .tracking(1.4)
                         .foregroundStyle(Theme.Palette.textSecondary)
                         .frame(minWidth: 92, alignment: .leading)
+
+                    if isPerformingBulkAction {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("UPDATING")
+                            .font(Theme.Typography.mono(10, weight: .heavy))
+                            .tracking(1.4)
+                            .foregroundStyle(Theme.Palette.textSecondary)
+                    }
 
                     bulkActionButton(.archive)
                         .disabled(selectedFolder == .drafts || selectedFolder == .sent || selectedEmailIds.isEmpty)
@@ -771,7 +779,9 @@ struct MailboxView: View {
             errorMessage = nil
         } catch {
             if activeRequestID == mailboxRequestID {
-                errorMessage = "Could not load inbox."
+                if emails.isEmpty {
+                    errorMessage = "Could not load \(selectedFolder.title.lowercased())."
+                }
             }
         }
     }
@@ -948,18 +958,28 @@ struct MailboxView: View {
         defer { isPerformingBulkAction = false }
 
         do {
-            if action.isSenderScopedAction {
+            if let requestAction = action.bulkRequestAction, !targets.contains(where: { $0.draftId != nil }) {
+                let response = try await apiClient.bulkUpdateEmails(targets, action: requestAction)
+                applyBulkAction(action, to: Set(response.updatedIds), senderEmails: targetSenderEmails)
+                if !response.failed.isEmpty {
+                    errorMessage = "\(response.updatedIds.count) updated, \(response.failed.count) failed."
+                } else {
+                    errorMessage = nil
+                }
+            } else if action.isSenderScopedAction {
                 try await performSenderScopedBulkAction(action, targets: targets)
+                applyBulkAction(action, to: targetIds, senderEmails: targetSenderEmails)
+                errorMessage = nil
             } else {
                 for email in targets {
                     try await perform(action, email: email)
                 }
+                applyBulkAction(action, to: targetIds, senderEmails: targetSenderEmails)
+                errorMessage = nil
             }
 
-            applyBulkAction(action, to: targetIds, senderEmails: targetSenderEmails)
             selectedEmailIds.removeAll()
             isSelectionMode = false
-            errorMessage = nil
         } catch {
             errorMessage = "Could not update selected emails."
         }
@@ -1145,7 +1165,7 @@ struct MailboxView: View {
         do {
             try await apiClient.startRealtimeSync(accountId: selectedAccountId)
         } catch {
-            errorMessage = "Could not start realtime sync."
+            // Realtime sync is best-effort; foreground refresh still works.
         }
     }
 
@@ -1580,7 +1600,6 @@ private struct AccountSearchBar: View {
     @Binding var selectedFolder: MailboxFolder
     @Binding var isPriorityMode: Bool
     @Binding var searchText: String
-    let onAddAccount: () -> Void
     let onRefreshAccounts: () -> Void
     let onManageBlockedSenders: () -> Void
     let onManageMutedSenders: () -> Void
@@ -1661,14 +1680,13 @@ private struct AccountSearchBar: View {
                         Button {
                             selectedAccountId = account.id
                         } label: {
-                            Label(account.email, systemImage: selectedAccountId == account.id ? "checkmark" : "envelope")
+                            Label(
+                                account.isDisconnected ? "\(account.email) · Reconnect needed" : account.email,
+                                systemImage: selectedAccountId == account.id
+                                    ? "checkmark"
+                                    : account.isDisconnected ? "exclamationmark.triangle" : "envelope"
+                            )
                         }
-                    }
-
-                    Divider()
-
-                    Button(action: onAddAccount) {
-                        Label("Add Account", systemImage: "plus")
                     }
                 } label: {
                     HStack(spacing: 6) {
@@ -1847,7 +1865,6 @@ private struct MailboxCacheKey: Hashable {
 private struct AuroraHeader: View {
     let unreadCount: Int
     let onOpenSettings: () -> Void
-    let onAddAccount: () -> Void
 
     private var todayLabel: String {
         let formatter = DateFormatter()
@@ -1881,17 +1898,10 @@ private struct AuroraHeader: View {
                 .tracking(1.6)
                 .foregroundStyle(Theme.Palette.textSecondary)
 
-            HStack(spacing: 8) {
-                Button(action: onAddAccount) {
-                    Image(systemName: "plus")
-                }
-                .buttonStyle(AuroraIconButtonStyle(size: 30))
-
-                Button(action: onOpenSettings) {
-                    Image(systemName: "gearshape")
-                }
-                .buttonStyle(AuroraIconButtonStyle(size: 30))
+            Button(action: onOpenSettings) {
+                Image(systemName: "gearshape")
             }
+            .buttonStyle(AuroraIconButtonStyle(size: 30))
         }
     }
 }
@@ -1996,6 +2006,19 @@ private enum BulkEmailAction: String, CaseIterable {
             return true
         default:
             return false
+        }
+    }
+
+    var bulkRequestAction: BulkEmailRequestAction? {
+        switch self {
+        case .archive: return .archive
+        case .trash: return .trash
+        case .markRead: return .markRead
+        case .markUnread: return .markUnread
+        case .star: return .star
+        case .unstar: return .unstar
+        case .pin, .unpin, .blockSender, .muteSender:
+            return nil
         }
     }
 }

@@ -1,5 +1,11 @@
 import { Router } from "express";
-import { getGoogleAccountById, getLatestGoogleAccount, listGoogleAccounts } from "../db/accounts.repo.js";
+import {
+  getGoogleAccountById,
+  getLatestGoogleAccount,
+  listGoogleAccounts,
+  markGoogleAccountConnected,
+  markGoogleAccountConnectionError
+} from "../db/accounts.repo.js";
 import {
   applyBlockedSenderState,
   deleteBlockedSender,
@@ -169,6 +175,7 @@ emailRoutes.get("/emails", async (request, response, next) => {
       }
 
       const result = await listMailboxEmails(account, { query, folder, pageToken: pageState[accountId] });
+      await markGoogleAccountConnected(account.id ?? accountId);
       const blockedSenderEmails = await listBlockedSenderEmails(account.id ?? accountId);
       const blockedAwareEmails = applyBlockedSenderState(result.emails, blockedSenderEmails);
       const visibleEmails = blockedAwareEmails;
@@ -201,6 +208,7 @@ emailRoutes.get("/emails", async (request, response, next) => {
         }
 
         const result = await listMailboxEmails(account, { query, folder, pageToken: pageState[accountSummary.id] });
+        await markGoogleAccountConnected(account.id ?? accountSummary.id);
         const blockedSenderEmails = await listBlockedSenderEmails(account.id ?? accountSummary.id);
         const blockedAwareEmails = applyBlockedSenderState(result.emails, blockedSenderEmails);
         const visibleEmails = blockedAwareEmails;
@@ -227,6 +235,9 @@ emailRoutes.get("/emails", async (request, response, next) => {
       }
 
       const failedAccount = accounts[index];
+      if (failedAccount?.id) {
+        void markGoogleAccountConnectionError(failedAccount.id, result.reason);
+      }
       console.warn("Skipping Gmail account during all-inbox load", {
         accountId: failedAccount?.id,
         email: failedAccount?.email,
@@ -627,6 +638,76 @@ emailRoutes.post("/emails/:id/trash", async (request, response, next) => {
 
     await trashEmail(account, request.params.id);
     response.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+emailRoutes.post("/emails/bulk", async (request, response, next) => {
+  try {
+    const action = typeof request.body?.action === "string" ? request.body.action : "";
+    const items = Array.isArray(request.body?.emails) ? request.body.emails : [];
+    const allowedActions = new Set(["archive", "trash", "markRead", "markUnread", "star", "unstar"]);
+
+    if (!allowedActions.has(action) || items.length === 0) {
+      response.status(400).json({ error: "Missing bulk action or emails." });
+      return;
+    }
+
+    const groups = new Map<string, string[]>();
+    for (const item of items) {
+      if (typeof item?.id !== "string" || typeof item?.accountId !== "string") continue;
+      groups.set(item.accountId, [...(groups.get(item.accountId) ?? []), item.id]);
+    }
+
+    const updatedIds: string[] = [];
+    const failed: Array<{ id: string; accountId: string }> = [];
+
+    for (const [accountId, ids] of groups) {
+      const account = await getGoogleAccountById(accountId);
+      if (!account) {
+        failed.push(...ids.map((id) => ({ id, accountId })));
+        continue;
+      }
+
+      const results = await Promise.allSettled(
+        ids.map(async (id) => {
+          switch (action) {
+            case "archive":
+              await archiveEmail(account, id);
+              break;
+            case "trash":
+              await trashEmail(account, id);
+              break;
+            case "markRead":
+              await markEmailRead(account, id);
+              break;
+            case "markUnread":
+              await markEmailUnread(account, id);
+              break;
+            case "star":
+              await starEmail(account, id);
+              break;
+            case "unstar":
+              await unstarEmail(account, id);
+              break;
+          }
+          return id;
+        })
+      );
+
+      results.forEach((result, index) => {
+        const id = ids[index];
+        if (!id) return;
+        if (result.status === "fulfilled") {
+          updatedIds.push(id);
+        } else {
+          failed.push({ id, accountId });
+        }
+      });
+    }
+
+    response.json({ ok: failed.length === 0, updatedIds, failed });
   } catch (error) {
     next(error);
   }
