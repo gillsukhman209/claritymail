@@ -533,7 +533,7 @@ struct EmailDetailView: View {
 
     @ViewBuilder
     private var threadSection: some View {
-        let messages = threadEmails.isEmpty ? [visibleEmail] : threadEmails
+        let messages = dedupedThreadEmails(threadEmails.isEmpty ? [visibleEmail] : threadEmails)
         VStack(alignment: .leading, spacing: 22) {
             EyebrowLabel(
                 text: messages.count > 1 ? "Conversation — \(messages.count) entries" : "Body",
@@ -557,6 +557,40 @@ struct EmailDetailView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func dedupedThreadEmails(_ emails: [Email]) -> [Email] {
+        let byId = Dictionary(grouping: emails, by: \.id).compactMap { _, values in
+            values.max(by: { $0.receivedAt < $1.receivedAt })
+        }
+
+        let byBody = Dictionary(grouping: byId, by: { threadDuplicateKey(for: $0) }).compactMap { _, values in
+            values.max(by: { $0.receivedAt < $1.receivedAt })
+        }
+
+        return byBody.sorted { $0.receivedAt < $1.receivedAt }
+    }
+
+    private func threadDuplicateKey(for email: Email) -> String {
+        let normalizedSubject = email.subject
+            .lowercased()
+            .replacingOccurrences(
+                of: #"^(re|fw|fwd):\s*"#,
+                with: "",
+                options: .regularExpression
+            )
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedBody = (email.body ?? email.htmlBody?.strippingHTMLForDuplicateKey ?? email.snippet)
+            .lowercased()
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .prefix(4000)
+
+        if normalizedBody.count < 250 {
+            return "id:\(email.id)"
+        }
+
+        return "\(email.senderEmailAddress.lowercased())|\(normalizedSubject)|\(normalizedBody)"
     }
 
     private func composerOverlay(mode: ComposerView.Mode, isPresented: Binding<Bool>) -> some View {
@@ -1187,6 +1221,12 @@ private struct ThreadMessageView: View {
                     .frame(height: 0.5)
             }
 
+            EmailHTMLView(
+                html: email.htmlBody,
+                plainText: email.body ?? email.snippet
+            )
+            .frame(maxWidth: .infinity, alignment: .leading)
+
             let attachments = email.attachments ?? []
             if !attachments.isEmpty {
                 VStack(alignment: .leading, spacing: 8) {
@@ -1207,14 +1247,8 @@ private struct ThreadMessageView: View {
                         )
                     }
                 }
-                .padding(.bottom, 4)
+                .padding(.top, 4)
             }
-
-            EmailHTMLView(
-                html: email.htmlBody,
-                plainText: email.body ?? email.snippet
-            )
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.vertical, 4)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1290,5 +1324,19 @@ private struct SummaryContentView: View {
                 .tracking(1.4)
                 .foregroundStyle(Theme.Palette.textSecondary)
         }
+    }
+}
+
+private extension String {
+    var strippingHTMLForDuplicateKey: String {
+        replacingOccurrences(of: #"<style[\s\S]*?</style>"#, with: " ", options: .regularExpression)
+            .replacingOccurrences(of: #"<script[\s\S]*?</script>"#, with: " ", options: .regularExpression)
+            .replacingOccurrences(of: #"<[^>]+>"#, with: " ", options: .regularExpression)
+            .replacingOccurrences(of: #"&nbsp;"#, with: " ", options: .regularExpression)
+            .replacingOccurrences(of: #"&amp;"#, with: "&", options: .regularExpression)
+            .replacingOccurrences(of: #"&lt;"#, with: "<", options: .regularExpression)
+            .replacingOccurrences(of: #"&gt;"#, with: ">", options: .regularExpression)
+            .replacingOccurrences(of: #"&quot;"#, with: "\"", options: .regularExpression)
+            .replacingOccurrences(of: #"&#39;"#, with: "'", options: .regularExpression)
     }
 }

@@ -371,6 +371,41 @@ async function parseHydratedFullEmailFromMessage(account: GmailAccount, data: an
   return email;
 }
 
+function threadDuplicateKey(email: any) {
+  const sender = String(email.sender ?? "").toLowerCase().trim();
+  const subject = String(email.subject ?? "").toLowerCase().replace(/^(re|fw|fwd):\s*/g, "").trim();
+  const body = cleanText(String(email.body ?? (email.htmlBody ? stripHtml(email.htmlBody) : email.snippet ?? "")))
+    .toLowerCase()
+    .slice(0, 4000);
+
+  if (body.length < 250) {
+    return `id:${email.id ?? ""}`;
+  }
+
+  return `${sender}|${subject}|${body}`;
+}
+
+function dedupeThreadEmails(emails: any[]) {
+  const byId = new Map<string, any>();
+  for (const email of emails) {
+    const id = String(email.id ?? "");
+    if (id && !byId.has(id)) {
+      byId.set(id, email);
+    }
+  }
+
+  const byBody = new Map<string, any>();
+  for (const email of byId.values()) {
+    const key = threadDuplicateKey(email);
+    const existing = byBody.get(key);
+    if (!existing || Date.parse(email.receivedAt) > Date.parse(existing.receivedAt)) {
+      byBody.set(key, email);
+    }
+  }
+
+  return Array.from(byBody.values());
+}
+
 function gmailDateQueryValue(date: Date) {
   const year = date.getUTCFullYear();
   const month = String(date.getUTCMonth() + 1).padStart(2, "0");
@@ -505,7 +540,7 @@ export async function getThread(account: GmailAccount, threadId: string) {
   });
 
   const emails = await Promise.all(result.data.messages?.map((message) => parseHydratedFullEmailFromMessage(account, message)) ?? []);
-  return emails.sort((left, right) => Date.parse(left.receivedAt) - Date.parse(right.receivedAt));
+  return dedupeThreadEmails(emails).sort((left, right) => Date.parse(left.receivedAt) - Date.parse(right.receivedAt));
 }
 
 export async function listEmailsInWindow(

@@ -6,8 +6,8 @@ export const RemotionRoot = () => {
     <Composition
       id="ClarityMailLaunch"
       component={ClarityMailLaunch}
-      durationInFrames={1440}
-      fps={30}
+      durationInFrames={528}
+      fps={24}
       width={1080}
       height={1920}
     />

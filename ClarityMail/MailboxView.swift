@@ -520,7 +520,7 @@ struct MailboxView: View {
                 .tint(Theme.Palette.warm)
 
                 Button {
-                    Task { await performSingleAction(email.isRead ? .markUnread : .markRead, email: email) }
+                    Task { await performSingleAction(email.isRead ? .markUnread : .markRead, email: email, deferReadReorder: true) }
                 } label: {
                     Label(
                         email.isRead ? "Unread" : "Read",
@@ -1043,7 +1043,7 @@ struct MailboxView: View {
         }
     }
 
-    private func performSingleAction(_ action: BulkEmailAction, email: Email) async {
+    private func performSingleAction(_ action: BulkEmailAction, email: Email, deferReadReorder: Bool = false) async {
         guard !isPerformingBulkAction else { return }
         isPerformingBulkAction = true
         defer { isPerformingBulkAction = false }
@@ -1051,7 +1051,10 @@ struct MailboxView: View {
 
         do {
             try await perform(action, email: email)
-            applyBulkAction(action, to: [email.id], senderEmails: senderEmails)
+            applyBulkAction(action, to: [email.id], senderEmails: senderEmails, shouldSortReadActions: !deferReadReorder)
+            if deferReadReorder && action.isReadStateAction {
+                scheduleReadStateReorder(for: email.id)
+            }
             errorMessage = nil
         } catch {
             errorMessage = "Could not update email."
@@ -1113,7 +1116,7 @@ struct MailboxView: View {
         }
     }
 
-    private func applyBulkAction(_ action: BulkEmailAction, to ids: Set<Email.ID>, senderEmails: Set<String> = []) {
+    private func applyBulkAction(_ action: BulkEmailAction, to ids: Set<Email.ID>, senderEmails: Set<String> = [], shouldSortReadActions: Bool = true) {
         switch action {
         case .trash, .archive:
             emails.removeAll { ids.contains($0.id) }
@@ -1126,12 +1129,16 @@ struct MailboxView: View {
                     emails[index].priorityReason = nil
                 }
             }
-            emails = sortMailboxEmails(emails)
+            if shouldSortReadActions {
+                emails = sortMailboxEmails(emails)
+            }
         case .markUnread:
             for index in emails.indices where ids.contains(emails[index].id) {
                 emails[index].isRead = false
             }
-            emails = sortMailboxEmails(emails)
+            if shouldSortReadActions {
+                emails = sortMailboxEmails(emails)
+            }
         case .star:
             for index in emails.indices where ids.contains(emails[index].id) {
                 emails[index].isStarred = true
@@ -1166,6 +1173,16 @@ struct MailboxView: View {
             } else {
                 emails.removeAll { ids.contains($0.id) || senderEmails.contains($0.senderEmailAddress.lowercased()) }
             }
+        }
+    }
+
+    private func scheduleReadStateReorder(for id: Email.ID) {
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            if isPriorityMode {
+                emails.removeAll { $0.id == id && !$0.isPriority }
+            }
+            emails = sortMailboxEmails(emails)
         }
     }
 
@@ -2077,6 +2094,10 @@ private enum BulkEmailAction: String, CaseIterable {
         default:
             return false
         }
+    }
+
+    var isReadStateAction: Bool {
+        self == .markRead || self == .markUnread
     }
 
     var bulkRequestAction: BulkEmailRequestAction? {

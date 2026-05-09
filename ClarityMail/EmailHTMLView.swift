@@ -42,18 +42,60 @@ struct EmailHTMLView: View {
     /// Wraps the email's HTML in a fixed-light render context so any color CSS
     /// the sender shipped (white-on-dark dark-mode tweaks, transparent text,
     /// etc.) lands on a predictable canvas.
-    private func wrappedHTML(_ body: String) -> String {
+    private func wrappedHTML(_ html: String) -> String {
         #if os(iOS)
         let bodyPadding = "0"
         #else
         let bodyPadding = "18px 18px 22px 18px"
         #endif
+        let documentParts = emailDocumentParts(from: html)
+        let isTableEmail = documentParts.body.range(of: "<table", options: .caseInsensitive) != nil
+        let rootClass = isTableEmail ? "clarity-table-email" : "clarity-fluid-email"
+        let viewport = isTableEmail ? "width=640, initial-scale=1.0" : "width=device-width, initial-scale=1.0"
+
+        let layoutCSS = """
+            html, body {
+              margin: 0;
+              padding: \(bodyPadding);
+              width: 100%;
+              box-sizing: border-box;
+              background: #FFFFFF;
+              color: #1A1A1A;
+              font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+              font-size: 15px;
+              line-height: 1.55;
+              overflow-x: hidden;
+              -webkit-text-size-adjust: 100%;
+            }
+            #clarity-email-root {
+              display: block;
+              max-width: none;
+              transform-origin: top left;
+            }
+            #clarity-email-root.clarity-table-email {
+              width: 640px;
+              min-width: 640px;
+            }
+            #clarity-email-root.clarity-fluid-email {
+              width: 100%;
+              min-width: 100%;
+            }
+            img {
+              height: auto;
+              border: 0;
+            }
+            a {
+              color: #C2410C;
+              text-decoration: underline;
+            }
+        """
 
         return """
         <!doctype html>
         <html>
         <head>
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          \(documentParts.head)
+          <meta name="viewport" content="\(viewport)">
           <meta name="color-scheme" content="light only">
           <meta name="supported-color-schemes" content="light">
           <style>
@@ -61,52 +103,7 @@ struct EmailHTMLView: View {
               color-scheme: light only;
               -webkit-color-scheme: light;
             }
-            html, body {
-              margin: 0;
-              padding: \(bodyPadding);
-              width: 100% !important;
-              max-width: 100% !important;
-              box-sizing: border-box;
-              background: #FFFFFF;
-              color: #1A1A1A;
-              font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
-              font-size: 15px;
-              line-height: 1.55;
-              word-wrap: break-word;
-              overflow-wrap: anywhere;
-              overflow-x: hidden;
-              -webkit-text-size-adjust: 100%;
-            }
-            *, *::before, *::after {
-              box-sizing: border-box;
-              max-width: 100% !important;
-            }
-            *:not([style*="color"]):not(font[color]) {
-              color: inherit;
-            }
-            p, div, span, td, th, li, h1, h2, h3, h4, h5, h6 {
-              color: inherit;
-            }
-            img {
-              max-width: 100% !important;
-              height: auto !important;
-              border: 0;
-            }
-            table {
-              width: 100% !important;
-              max-width: 100% !important;
-              border-collapse: collapse;
-              table-layout: auto !important;
-            }
-            td, th {
-              max-width: 100% !important;
-              overflow-wrap: anywhere;
-              word-break: break-word;
-            }
-            a {
-              color: #C2410C;
-              text-decoration: underline;
-            }
+            \(layoutCSS)
             blockquote {
               margin: 12px 0;
               padding: 0 0 0 14px;
@@ -132,9 +129,31 @@ struct EmailHTMLView: View {
             }
           </style>
         </head>
-        <body>\(body)</body>
+        <body><div id="clarity-email-root" class="\(rootClass)">\(documentParts.body)</div></body>
         </html>
         """
+    }
+
+    private func emailDocumentParts(from html: String) -> (head: String, body: String) {
+        let head = firstCapture(in: html, pattern: "<head[^>]*>([\\s\\S]*?)</head>") ?? ""
+        let body = firstCapture(in: html, pattern: "<body[^>]*>([\\s\\S]*?)</body>") ?? html
+        return (head, body)
+    }
+
+    private func firstCapture(in value: String, pattern: String) -> String? {
+        guard let regex = try? NSRegularExpression(
+            pattern: pattern,
+            options: [.caseInsensitive, .dotMatchesLineSeparators]
+        ) else {
+            return nil
+        }
+        let fullRange = NSRange(value.startIndex..<value.endIndex, in: value)
+        guard let match = regex.firstMatch(in: value, range: fullRange),
+              match.numberOfRanges > 1,
+              let captureRange = Range(match.range(at: 1), in: value) else {
+            return nil
+        }
+        return String(value[captureRange])
     }
 }
 
@@ -226,7 +245,22 @@ private struct EmailWebView: NSViewRepresentable {
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            webView.evaluateJavaScript("Math.max(document.body.scrollHeight, document.documentElement.scrollHeight)") { [weak self] result, _ in
+            updateContentSize(for: webView)
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self, weak webView] in
+                guard let self, let webView else { return }
+                self.updateContentSize(for: webView)
+            }
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self, weak webView] in
+                guard let self, let webView else { return }
+                self.updateContentSize(for: webView)
+            }
+        }
+
+        private func updateContentSize(for webView: WKWebView) {
+            let viewportWidth = max(webView.bounds.width, 1)
+            webView.evaluateJavaScript(emailSizingScript(viewportWidth: viewportWidth)) { [weak self] result, _ in
                 guard let self else { return }
                 let height = CGFloat((result as? NSNumber)?.doubleValue ?? 120)
                 DispatchQueue.main.async {
@@ -317,14 +351,66 @@ private struct EmailWebView: UIViewRepresentable {
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            webView.evaluateJavaScript("Math.max(document.body.scrollHeight, document.documentElement.scrollHeight)") { [weak self] result, _ in
+            updateContentSize(for: webView)
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self, weak webView] in
+                guard let self, let webView else { return }
+                self.updateContentSize(for: webView)
+            }
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self, weak webView] in
+                guard let self, let webView else { return }
+                self.updateContentSize(for: webView)
+            }
+        }
+
+        private func updateContentSize(for webView: WKWebView) {
+            let viewportWidth = max(webView.bounds.width, 1)
+            webView.evaluateJavaScript(emailSizingScript(viewportWidth: viewportWidth)) { [weak self] result, _ in
                 guard let self else { return }
                 let height = CGFloat((result as? NSNumber)?.doubleValue ?? 120)
                 DispatchQueue.main.async {
-                    self.contentHeight = height + 24
+                    self.contentHeight = height + 8
                 }
             }
         }
     }
 }
 #endif
+
+private func emailSizingScript(viewportWidth: CGFloat) -> String {
+    """
+    (function() {
+      const root = document.getElementById('clarity-email-root') || document.body;
+      const viewportWidth = \(viewportWidth);
+      const isTableEmail = root.classList.contains('clarity-table-email');
+      const baseWidth = isTableEmail ? 640 : viewportWidth;
+
+      root.style.transform = 'none';
+      root.style.width = baseWidth + 'px';
+      root.style.minWidth = baseWidth + 'px';
+      root.style.maxWidth = 'none';
+
+      const naturalWidth = Math.max(
+        baseWidth,
+        root.scrollWidth,
+        root.offsetWidth,
+        document.body.scrollWidth,
+        document.documentElement.scrollWidth,
+        viewportWidth
+      );
+      const scale = Math.min(1, viewportWidth / naturalWidth);
+
+      root.style.width = naturalWidth + 'px';
+      root.style.minWidth = naturalWidth + 'px';
+      root.style.transformOrigin = 'top left';
+      root.style.transform = 'scale(' + scale + ')';
+
+      document.body.style.width = viewportWidth + 'px';
+      document.documentElement.style.width = viewportWidth + 'px';
+
+      const rect = root.getBoundingClientRect();
+      return Math.max(rect.height, document.body.scrollHeight * scale, 80);
+    })();
+    """
+}
