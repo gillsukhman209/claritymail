@@ -2,6 +2,7 @@ import { Router } from "express";
 import {
   getGoogleAccountById,
   getLatestGoogleAccount,
+  isGoogleAccountReauthRequired,
   listGoogleAccounts,
   markGoogleAccountConnected,
   markGoogleAccountConnectionError
@@ -185,31 +186,38 @@ emailRoutes.get("/emails", async (request, response, next) => {
         return;
       }
 
-      const result = await listMailboxEmails(account, { query, folder, pageToken: pageState[accountId] });
-      await markGoogleAccountConnected(account.id ?? accountId);
-      const blockedSenderEmails = await listBlockedSenderEmails(account.id ?? accountId);
-      const blockedAwareEmails = applyBlockedSenderState(result.emails, blockedSenderEmails);
-      const hiddenSenderEmails = await listHiddenSenderEmails(account.id ?? accountId);
-      const hiddenAwareEmails = applyHiddenSenderState(blockedAwareEmails, hiddenSenderEmails);
-      const visibleEmails = folder === "hidden" ? onlyHiddenEmails(hiddenAwareEmails, hiddenSenderEmails) : filterHiddenEmails(hiddenAwareEmails, hiddenSenderEmails);
-      const importantSenderEmails = await listImportantSenderEmails(account.id ?? accountId);
-      const emailsWithPriority = priorityOnly
-        ? await enrichEmailsWithPriority(account.id ?? accountId, visibleEmails, importantSenderEmails)
-        : applyImportantSenderPriority(visibleEmails, importantSenderEmails);
-      const mutedSenderEmails = await listMutedSenderEmails(account.id ?? accountId);
-      const emailsWithMutedState = applyMutedSenderState(emailsWithPriority, mutedSenderEmails);
-      const emailsWithPinnedState = await addPinnedState(account.id ?? accountId, emailsWithMutedState);
-      const emails = priorityOnly
-        ? sortPriorityEmails(emailsWithPinnedState.filter((email: any) => email.priorityStatus === "important"))
-        : folder === "inbox"
-          ? sortInboxEmails(emailsWithPinnedState)
-          : sortPinnedNewestFirst(emailsWithPinnedState);
+      try {
+        const result = await listMailboxEmails(account, { query, folder, pageToken: pageState[accountId] });
+        await markGoogleAccountConnected(account.id ?? accountId);
+        const blockedSenderEmails = await listBlockedSenderEmails(account.id ?? accountId);
+        const blockedAwareEmails = applyBlockedSenderState(result.emails, blockedSenderEmails);
+        const hiddenSenderEmails = await listHiddenSenderEmails(account.id ?? accountId);
+        const hiddenAwareEmails = applyHiddenSenderState(blockedAwareEmails, hiddenSenderEmails);
+        const visibleEmails = folder === "hidden" ? onlyHiddenEmails(hiddenAwareEmails, hiddenSenderEmails) : filterHiddenEmails(hiddenAwareEmails, hiddenSenderEmails);
+        const importantSenderEmails = await listImportantSenderEmails(account.id ?? accountId);
+        const emailsWithPriority = priorityOnly
+          ? await enrichEmailsWithPriority(account.id ?? accountId, visibleEmails, importantSenderEmails)
+          : applyImportantSenderPriority(visibleEmails, importantSenderEmails);
+        const mutedSenderEmails = await listMutedSenderEmails(account.id ?? accountId);
+        const emailsWithMutedState = applyMutedSenderState(emailsWithPriority, mutedSenderEmails);
+        const emailsWithPinnedState = await addPinnedState(account.id ?? accountId, emailsWithMutedState);
+        const emails = priorityOnly
+          ? sortPriorityEmails(emailsWithPinnedState.filter((email: any) => email.priorityStatus === "important"))
+          : folder === "inbox"
+            ? sortInboxEmails(emailsWithPinnedState)
+            : sortPinnedNewestFirst(emailsWithPinnedState);
 
-      response.json({
-        emails,
-        nextPageToken: encodePageState({ [accountId]: result.nextPageToken })
-      });
-      return;
+        response.json({
+          emails,
+          nextPageToken: encodePageState({ [accountId]: result.nextPageToken })
+        });
+        return;
+      } catch (error) {
+        if (isGoogleAccountReauthRequired(error)) {
+          await markGoogleAccountConnectionError(account.id ?? accountId, error);
+        }
+        throw error;
+      }
     }
 
     const accounts = await listGoogleAccounts();
@@ -250,7 +258,7 @@ emailRoutes.get("/emails", async (request, response, next) => {
       }
 
       const failedAccount = accounts[index];
-      if (failedAccount?.id) {
+      if (failedAccount?.id && isGoogleAccountReauthRequired(result.reason)) {
         void markGoogleAccountConnectionError(failedAccount.id, result.reason);
       }
       console.warn("Skipping Gmail account during all-inbox load", {

@@ -1,4 +1,5 @@
 import { google } from "googleapis";
+import { updateGoogleAccountTokens } from "../db/accounts.repo.js";
 
 type GmailAccount = {
   id?: string;
@@ -39,6 +40,17 @@ function getOAuthClient(account: GmailAccount) {
 
   oauth2Client.setCredentials({
     refresh_token: account.refreshToken
+  });
+
+  oauth2Client.on("tokens", (tokens) => {
+    if (!account.id) return;
+    void updateGoogleAccountTokens(account.id, tokens).catch((error) => {
+      console.warn("Could not persist refreshed Google token", {
+        accountId: account.id,
+        email: account.email,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    });
   });
 
   return oauth2Client;

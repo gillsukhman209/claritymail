@@ -9,7 +9,7 @@ type GoogleProfile = {
   picture: string | null;
 };
 
-type GoogleAccount = {
+export type GoogleAccount = {
   id: string;
   email: string;
   refreshToken: string;
@@ -80,13 +80,18 @@ function rememberSummaries(summaries: GoogleAccountSummary[]) {
 }
 
 export async function saveGoogleAccount(profile: GoogleProfile, tokens: Credentials) {
-  if (!tokens.refresh_token) {
-    throw new Error("Google did not return a refresh token. Re-consent is required.");
-  }
-
   const db = getFirestore();
   const userRef = db.collection("users").doc(profile.googleUserId);
   const accountRef = db.collection("gmailAccounts").doc(profile.googleUserId);
+  const existingAccount = await accountRef.get();
+  const existingEncryptedRefreshToken = existingAccount.data()?.encryptedRefreshToken;
+  const refreshToken =
+    tokens.refresh_token ??
+    (typeof existingEncryptedRefreshToken === "string" ? decryptText(existingEncryptedRefreshToken) : null);
+
+  if (!refreshToken) {
+    throw new Error("Google did not return a refresh token. Re-consent is required.");
+  }
 
   await userRef.set(
     {
@@ -103,7 +108,7 @@ export async function saveGoogleAccount(profile: GoogleProfile, tokens: Credenti
       userId: profile.googleUserId,
       email: profile.email,
       provider: "gmail",
-      encryptedRefreshToken: encryptText(tokens.refresh_token),
+      encryptedRefreshToken: encryptText(refreshToken),
       scope: tokens.scope ?? null,
       tokenType: tokens.token_type ?? null,
       expiryDate: tokens.expiry_date ?? null,
@@ -128,11 +133,41 @@ export async function saveGoogleAccount(profile: GoogleProfile, tokens: Credenti
   rememberAccount({
     id: accountRef.id,
     email: profile.email,
-    refreshToken: tokens.refresh_token,
+    refreshToken,
     lastHistoryId: null
   });
 
   return summary;
+}
+
+export async function updateGoogleAccountTokens(accountId: string, tokens: Credentials) {
+  const update: Record<string, unknown> = {
+    tokenUpdatedAt: new Date(),
+    isConnected: true,
+    connectionError: null,
+    connectionCheckedAt: new Date()
+  };
+
+  if (tokens.refresh_token) {
+    update.encryptedRefreshToken = encryptText(tokens.refresh_token);
+
+    const cached = accountDetailsCache.get(accountId);
+    if (cached) {
+      accountDetailsCache.set(accountId, { ...cached, refreshToken: tokens.refresh_token });
+    }
+  }
+
+  if (tokens.scope) update.scope = tokens.scope;
+  if (tokens.token_type) update.tokenType = tokens.token_type;
+  if (tokens.expiry_date) update.expiryDate = tokens.expiry_date;
+
+  const db = getFirestore();
+  await db.collection("gmailAccounts").doc(accountId).set(update, { merge: true });
+  updateCachedConnectionState(accountId, {
+    isConnected: true,
+    connectionError: null,
+    connectionCheckedAt: (update.connectionCheckedAt as Date).toISOString()
+  });
 }
 
 export async function getLatestGoogleAccount() {
@@ -284,6 +319,40 @@ export async function markGoogleAccountConnectionError(accountId: string, error:
     connectionError: message.slice(0, 300),
     connectionCheckedAt: checkedAt.toISOString()
   });
+}
+
+export function isGoogleAccountReauthRequired(error: unknown) {
+  const googleError = error as {
+    code?: unknown;
+    status?: unknown;
+    message?: unknown;
+    response?: {
+      data?: {
+        error?: unknown;
+        error_description?: unknown;
+      };
+    };
+    errors?: Array<{ reason?: unknown; message?: unknown }>;
+  };
+  const code = String(googleError.response?.data?.error ?? googleError.code ?? "");
+  const reason = String(googleError.errors?.[0]?.reason ?? "");
+  const message = [
+    googleError.message,
+    googleError.response?.data?.error_description,
+    googleError.errors?.[0]?.message
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  return (
+    code === "invalid_grant" ||
+    reason === "invalidGrant" ||
+    message.includes("invalid_grant") ||
+    message.includes("token has been expired or revoked") ||
+    message.includes("refresh token has expired") ||
+    message.includes("refresh token is invalid")
+  );
 }
 
 export async function updateGmailWatchState(

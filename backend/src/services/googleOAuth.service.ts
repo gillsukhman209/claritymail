@@ -25,6 +25,7 @@ export function createGoogleAuthUrl() {
   return oauth2Client.generateAuthUrl({
     access_type: "offline",
     prompt: "consent select_account",
+    include_granted_scopes: true,
     scope: scopes
   });
 }
