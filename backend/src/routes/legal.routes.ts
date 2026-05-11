@@ -73,6 +73,17 @@ function page(title: string, body: string) {
         letter-spacing: 0.16em;
         text-transform: uppercase;
       }
+      nav {
+        border-top: 1px solid var(--line);
+        margin-top: 40px;
+        padding-top: 24px;
+      }
+      nav a {
+        display: inline-block;
+        font-size: 18px;
+        font-weight: 700;
+        margin: 0 22px 12px 0;
+      }
     </style>
   </head>
   <body>
@@ -91,7 +102,10 @@ function page(title: string, body: string) {
 legalRoutes.get("/", (_request, response) => {
   response.type("html").send(page("A calmer way to experience email", `
     <p>ClarityMail is an AI-powered Gmail client for iOS and macOS. It helps users read, search, summarize, organize, and send email through the Gmail API.</p>
-    <p><a href="/privacy">Privacy Policy</a> · <a href="/terms">Terms of Service</a></p>
+    <nav aria-label="Legal links">
+      <a href="https://claritymailapp.com/privacy" rel="privacy-policy">Privacy Policy</a>
+      <a href="https://claritymailapp.com/terms">Terms of Service</a>
+    </nav>
   `));
 });
 
