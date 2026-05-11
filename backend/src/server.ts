@@ -4,6 +4,7 @@ import cors from "cors";
 import { authRoutes } from "./routes/auth.routes.js";
 import { emailRoutes } from "./routes/email.routes.js";
 import { healthRoutes } from "./routes/health.routes.js";
+import { legalRoutes } from "./routes/legal.routes.js";
 import { morningBriefRoutes } from "./routes/morningBrief.routes.js";
 import { realtimeRoutes } from "./routes/realtime.routes.js";
 
@@ -15,6 +16,7 @@ app.use(cors());
 app.use(express.json({ limit: "40mb" }));
 
 app.use(healthRoutes);
+app.use(legalRoutes);
 app.use("/auth", authRoutes);
 app.use(emailRoutes);
 app.use(morningBriefRoutes);
